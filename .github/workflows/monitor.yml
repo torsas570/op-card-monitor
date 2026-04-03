@@ -3,7 +3,7 @@ name: Monitor One Piece Card Game
 on:
   schedule:
     - cron: '*/15 * * * *'  # Cada 15 minutos
-  workflow_dispatch: {}      # Permite ejecutar manualmente
+  workflow_dispatch:
 
 jobs:
   check:
