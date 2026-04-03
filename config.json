@@ -1,0 +1,59 @@
+{
+    "telegram_bot_token": "TU_BOT_TOKEN_AQUI",
+    "telegram_chat_id": "TU_CHAT_ID_AQUI",
+    "check_interval_minutes": 15,
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "sites": [
+        {
+            "name": "Montalfan",
+            "url": "https://montalfan.com/categoria-producto/one-piece-card-game/?orderby=date",
+            "type": "html",
+            "selector": "li.product",
+            "title_selector": ".woocommerce-loop-product__title",
+            "link_selector": "a",
+            "price_selector": ".price"
+        },
+        {
+            "name": "Isekai Alcorcon",
+            "url": "https://isekai-alcorcon.es/es/c/cajas/110",
+            "type": "html",
+            "selector": ".product-miniature",
+            "title_selector": ".product-title",
+            "link_selector": "a",
+            "price_selector": ".price"
+        },
+        {
+            "name": "Empire Games",
+            "url": "https://empiregames.es/categoria-producto/juegos-de-cartas-coleccionables/one-piece-card-game",
+            "type": "html",
+            "selector": "li.product",
+            "title_selector": ".woocommerce-loop-product__title",
+            "link_selector": "a",
+            "price_selector": ".price"
+        },
+        {
+            "name": "AllInTCG",
+            "url": "https://allintcg.com/collections/one-piece-card-game-booster-boxes",
+            "type": "html",
+            "selector": ".card-wrapper",
+            "title_selector": ".card__heading",
+            "link_selector": "a[href*='/products/']",
+            "price_selector": ".price-item"
+        },
+        {
+            "name": "FreakCorp",
+            "url": "https://freakcorp.com/collections/op-novedades",
+            "type": "html",
+            "selector": ".product-card",
+            "title_selector": ".product-card-title",
+            "link_selector": "a[href*='/products/']",
+            "price_selector": ".price"
+        },
+        {
+            "name": "Only Cards",
+            "url": "https://www.only-cards.com/wp-json/wc/store/v1/products?per_page=50&category=956",
+            "type": "api",
+            "category_id": 956
+        }
+    ]
+}
