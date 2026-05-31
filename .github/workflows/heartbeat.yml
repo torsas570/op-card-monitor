@@ -8,6 +8,8 @@ on:
 jobs:
   beat:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,3 +25,11 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python3 heartbeat.py
+      - name: Keep-alive commit (evita que GitHub pause los crons por inactividad)
+        run: |
+          date -u +"%Y-%m-%d %H:%M UTC" > .last_heartbeat
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .last_heartbeat
+          git diff --staged --quiet || git commit -m "heartbeat: keep-alive [skip ci]"
+          git push
