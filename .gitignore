@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 venv/
 .claude/
+# Secretos locales: nunca subir tokens. El token se pasa por env var (TELEGRAM_BOT_TOKEN)
+.env
+config.local.json
+*.local.json
