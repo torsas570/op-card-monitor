@@ -2,7 +2,7 @@
     "telegram_bot_token": "TU_BOT_TOKEN_AQUI",
     "telegram_chat_id": "TU_CHAT_ID_AQUI",
     "check_interval_minutes": 15,
-    "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "sites": [
         {
             "name": "Montalfan",
@@ -24,36 +24,106 @@
         },
         {
             "name": "Empire Games",
-            "url": "https://empiregames.es/categoria-producto/juegos-de-cartas-coleccionables/one-piece-card-game",
-            "type": "html",
-            "selector": "li.product",
-            "title_selector": ".woocommerce-loop-product__title",
-            "link_selector": "a",
-            "price_selector": ".price"
+            "url": "https://www.empiregames.es/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
+            "type": "api"
         },
         {
             "name": "AllInTCG",
-            "url": "https://allintcg.com/collections/one-piece-card-game-booster-boxes",
-            "type": "html",
-            "selector": ".card-wrapper",
-            "title_selector": ".card__heading",
-            "link_selector": "a[href*='/products/']",
-            "price_selector": ".price-item"
+            "url": "https://allintcg.com/collections/one-piece-card-game-booster-boxes/products.json?limit=50",
+            "type": "api"
         },
         {
             "name": "FreakCorp",
-            "url": "https://freakcorp.com/collections/op-novedades",
-            "type": "html",
-            "selector": ".product-card",
-            "title_selector": ".product-card-title",
-            "link_selector": "a[href*='/products/']",
-            "price_selector": ".price"
+            "url": "https://freakcorp.com/collections/one-piece-card-game/products.json?limit=50",
+            "type": "api"
         },
         {
             "name": "Only Cards",
             "url": "https://www.only-cards.com/wp-json/wc/store/v1/products?per_page=50&category=956",
-            "type": "api",
-            "category_id": 956
+            "type": "api"
+        },
+        {
+            "name": "TodoHits",
+            "url": "https://todohits.com/collections/one-piece/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "JJ Collection",
+            "url": "https://www.jjcollection.es/collections/one-piece-card/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "CardZone",
+            "url": "https://cardzone.es/collections/one-piece-tcg/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "La Escotilla",
+            "url": "https://laescotillajuegos.com/collections/one-piece-tcg/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "TCG Level",
+            "url": "https://tcglevel.com/collections/one-piece/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "Kantocards",
+            "url": "https://kantocards.com/collections/one-piece/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "Europe TCG",
+            "url": "https://europetcg.com/en/collections/one-piece/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "Pokemillon",
+            "url": "https://www.pokemillon.com/collections/one-piece/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "Mono de Juegos",
+            "url": "https://www.monodejuegos.shop/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
+            "type": "api"
+        },
+        {
+            "name": "ELIUS",
+            "url": "https://www.eliusweb.com/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
+            "type": "api"
+        },
+        {
+            "name": "Friki de Nacimiento",
+            "url": "https://frikidenacimiento.es/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
+            "type": "api"
+        },
+        {
+            "name": "Friki Galaxy",
+            "url": "https://frikigalaxy.com/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
+            "type": "api"
+        },
+        {
+            "name": "Tienda Mulligan",
+            "url": "https://shop.tiendamulligan.com/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
+            "type": "api"
+        },
+        {
+            "name": "Dungeon Marvels",
+            "url": "https://dungeonmarvels.com/1106-one-piece-card-game",
+            "type": "html",
+            "selector": ".product-miniature",
+            "title_selector": ".product-title",
+            "link_selector": "a",
+            "price_selector": ".price"
+        },
+        {
+            "name": "Distrito Zero",
+            "url": "https://distritozero.es/categoria/one-piece-632",
+            "type": "html",
+            "selector": ".product-miniature",
+            "title_selector": ".product-title",
+            "link_selector": "a",
+            "price_selector": ".price"
         }
     ]
 }

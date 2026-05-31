@@ -49,9 +49,25 @@ def save_state(state):
         json.dump(state, f, indent=2, ensure_ascii=False)
 
 
+def build_headers(user_agent):
+    return {
+        "User-Agent": user_agent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+
 def fetch_page(url, user_agent):
-    headers = {"User-Agent": user_agent}
-    resp = requests.get(url, headers=headers, timeout=30)
+    resp = requests.get(url, headers=build_headers(user_agent), timeout=30)
     resp.raise_for_status()
     return resp.text
 
@@ -85,24 +101,46 @@ def extract_products_html(html, site_cfg):
     return products
 
 
-def extract_products_api(data):
-    """Extrae productos de la API WooCommerce Store (Only Cards)."""
+def extract_products_api(data, base_url=""):
+    """Detección automática: WooCommerce Store API o Shopify products.json."""
+    import html as html_mod
     products = []
-    for item in data:
-        title = item.get("name", "Sin título")
-        link = item.get("permalink", "")
-        raw_price = item.get("prices", {}).get("price", "0")
-        currency = item.get("prices", {}).get("currency_symbol", "€")
-        price = f"{int(raw_price) / 100:.2f}{currency}" if raw_price else "Precio no disponible"
 
+    # Shopify products.json → {"products": [{"title", "handle", "variants":[{"price"}]}]}
+    if isinstance(data, dict) and "products" in data and data["products"] and "handle" in data["products"][0]:
+        from urllib.parse import urlparse
+        base = ""
+        if base_url:
+            p = urlparse(base_url)
+            base = f"{p.scheme}://{p.netloc}"
+        for item in data["products"]:
+            title = html_mod.unescape(item.get("title", "Sin título"))
+            handle = item.get("handle", "")
+            link = f"{base}/products/{handle}" if handle else ""
+            variants = item.get("variants") or []
+            price = "Precio no disponible"
+            if variants:
+                p_raw = variants[0].get("price", "")
+                if p_raw:
+                    price = f"{p_raw}€"
+            uid = hashlib.md5(f"{item.get('id', '')}{title}".encode()).hexdigest()
+            products.append({"uid": uid, "title": title, "link": link, "price": price})
+        return products
+
+    # WooCommerce Store API → list of items
+    items = data if isinstance(data, list) else data.get("products", [])
+    for item in items:
+        title = html_mod.unescape(item.get("name", "Sin título"))
+        link = item.get("permalink") or item.get("url", "")
+        prices = item.get("prices", {}) or {}
+        raw_price = prices.get("price") or "0"
+        currency = prices.get("currency_symbol", "€")
+        try:
+            price = f"{int(raw_price) / 100:.2f}{currency}"
+        except (ValueError, TypeError):
+            price = "Precio no disponible"
         uid = hashlib.md5(f"{item.get('id', '')}{title}".encode()).hexdigest()
-
-        products.append({
-            "uid": uid,
-            "title": title,
-            "link": link,
-            "price": price,
-        })
+        products.append({"uid": uid, "title": title, "link": link, "price": price})
     return products
 
 
@@ -128,13 +166,12 @@ def check_site(site_cfg, state, config):
     log.info(f"Revisando {name}: {url}")
 
     try:
-        headers = {"User-Agent": config["user_agent"]}
-        resp = requests.get(url, headers=headers, timeout=30)
+        resp = requests.get(url, headers=build_headers(config["user_agent"]), timeout=30)
         resp.raise_for_status()
 
         if site_type == "api":
             data = resp.json()
-            products = extract_products_api(data)
+            products = extract_products_api(data, base_url=url)
         else:
             products = extract_products_html(resp.text, site_cfg)
     except Exception as e:
