@@ -79,6 +79,11 @@
             "type": "api"
         },
         {
+            "name": "Otakura (IT)",
+            "url": "https://otakura.com/en/collections/one-piece-card-game/products.json?limit=250",
+            "type": "api"
+        },
+        {
             "name": "Pokemillon",
             "url": "https://www.pokemillon.com/collections/one-piece/products.json?limit=50",
             "type": "api"
