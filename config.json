@@ -84,6 +84,26 @@
             "type": "api"
         },
         {
+            "name": "Universe TCG (ES)",
+            "url": "https://www.universetcg.com/collections/one-piece-card-game/products.json?limit=250",
+            "type": "api"
+        },
+        {
+            "name": "TCGHOBBY (TW)",
+            "url": "https://www.tcghobby.com/collections/one-piece/products.json?limit=250",
+            "type": "api"
+        },
+        {
+            "name": "Pixel and Block (UK)",
+            "url": "https://pixelandblock.co.uk/collections/one-piece/products.json?limit=250",
+            "type": "api"
+        },
+        {
+            "name": "Monster Card Corner (UK)",
+            "url": "https://monstercardcorner.co.uk/collections/one-piece/products.json?limit=250",
+            "type": "api"
+        },
+        {
             "name": "Pokemillon",
             "url": "https://www.pokemillon.com/collections/one-piece/products.json?limit=50",
             "type": "api"
