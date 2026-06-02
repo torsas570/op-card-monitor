@@ -112,7 +112,7 @@
             "name": "Dungeon Marvels",
             "url": "https://dungeonmarvels.com/1106-one-piece-card-game",
             "type": "html",
-            "selector": ".product-miniature",
+            "selector": "#js-product-list .product-miniature",
             "title_selector": ".product-title",
             "link_selector": "a",
             "price_selector": ".price"
@@ -121,7 +121,7 @@
             "name": "Distrito Zero",
             "url": "https://distritozero.es/categoria/one-piece-632",
             "type": "html",
-            "selector": ".product-miniature",
+            "selector": "#js-product-list .product-miniature",
             "title_selector": ".product-title",
             "link_selector": "a",
             "price_selector": ".price"
