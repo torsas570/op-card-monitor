@@ -150,6 +150,15 @@
             "title_selector": ".product-title",
             "link_selector": "a",
             "price_selector": ".price"
+        },
+        {
+            "name": "La Cueva Roja",
+            "url": "https://lacuevaroja.com/one-piece-card-game",
+            "type": "html",
+            "selector": "#js-product-list .product-miniature",
+            "title_selector": ".product-title",
+            "link_selector": "a",
+            "price_selector": ".price"
         }
     ]
 }
