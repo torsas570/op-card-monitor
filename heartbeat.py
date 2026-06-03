@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Heartbeat semanal — resumen del bot OP a Telegram."""
+"""Heartbeat diario — resumen del bot OP a Telegram."""
 import json
 import os
 import sys
@@ -35,7 +35,7 @@ msg = (
     f"📦 Productos OP tracked: {total_products}\n"
     f"  • En stock: {in_stock}\n"
     f"  • Agotados: {oos}\n\n"
-    f"Si esto no te llega cada domingo → el bot está caído. Revisa GitHub Actions."
+    f"Si esto no te llega cada noche (00:00 España) → el bot está caído. Revisa GitHub Actions."
 )
 
 resp = requests.post(

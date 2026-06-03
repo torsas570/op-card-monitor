@@ -1,8 +1,8 @@
-name: Heartbeat semanal OP
+name: Heartbeat diario OP
 
 on:
   schedule:
-    - cron: '5 10 * * 0'  # Domingos 10:05 UTC (5 min después del de Pokémon)
+    - cron: '5 22 * * *'  # Todos los días 22:05 UTC (00:05 hora España; 5 min después del de Pokémon)
   workflow_dispatch:
 
 jobs:
