@@ -159,6 +159,26 @@
             "title_selector": ".product-title",
             "link_selector": "a",
             "price_selector": ".price"
+        },
+        {
+            "name": "JumpIchiban (JP promo)",
+            "url": "https://jumpichiban.com/collections/one-piece-card-game-promo-and-special-cards/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "CardOtaku (JP promo)",
+            "url": "https://cardotaku.com/collections/one-piece-card-game-promotional-cards/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "TCG Corner (JP promo)",
+            "url": "https://tcg-corner.com/collections/one-piece-promo-card/products.json?limit=50",
+            "type": "api"
+        },
+        {
+            "name": "Fuji Card Shop (JP)",
+            "url": "https://www.fujicardshop.com/wp-json/wc/store/v1/products?per_page=50&category=432&orderby=date",
+            "type": "api"
         }
     ]
 }
