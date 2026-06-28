@@ -179,6 +179,11 @@
             "name": "Fuji Card Shop (JP)",
             "url": "https://www.fujicardshop.com/wp-json/wc/store/v1/products?per_page=50&category=432&orderby=date",
             "type": "api"
+        },
+        {
+            "name": "Evolution TCG (NL)",
+            "url": "https://evlutcg.com/collections/one-piece-booster-boxes-cases/products.json?limit=250",
+            "type": "api"
         }
     ]
 }
