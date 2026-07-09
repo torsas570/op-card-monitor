@@ -104,8 +104,39 @@
             "type": "api"
         },
         {
-            "name": "Pokemillon",
-            "url": "https://www.pokemillon.com/collections/one-piece/products.json?limit=50",
+            "name": "Pokemillon (Cajas OP)",
+            "url": "https://www.pokemillon.com/collections/caja-one-piece/products.json?limit=250",
+            "type": "api"
+        },
+        {
+            "name": "Pokemillon (Sobres OP)",
+            "url": "https://www.pokemillon.com/collections/sobres-one-piece/products.json?limit=250",
+            "type": "api"
+        },
+        {
+            "name": "Pokemillon (Mazos OP)",
+            "url": "https://www.pokemillon.com/collections/mazos-y-barajas-one-piece/products.json?limit=250",
+            "type": "api"
+        },
+        {
+            "_comment": "=== Sunny Store (Shopify ES) — colecciones de SELLADO. La colección 'one-piece' (1063) es casi toda singles y spamearía. ===",
+            "name": "Sunny Store (Cajas OP ENG)",
+            "url": "https://sunnystore.es/collections/cajas-one-piece-ingles/products.json?limit=250",
+            "type": "api"
+        },
+        {
+            "name": "Sunny Store (Cajas OP JAP)",
+            "url": "https://sunnystore.es/collections/cajas-one-piece-japones/products.json?limit=250",
+            "type": "api"
+        },
+        {
+            "name": "Sunny Store (Sobres OP ENG)",
+            "url": "https://sunnystore.es/collections/sobres-one-piece-ingles/products.json?limit=250",
+            "type": "api"
+        },
+        {
+            "name": "Sunny Store (Sobres OP JAP)",
+            "url": "https://sunnystore.es/collections/sobres-japones-one-piece/products.json?limit=250",
             "type": "api"
         },
         {
