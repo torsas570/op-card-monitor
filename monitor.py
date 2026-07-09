@@ -103,7 +103,22 @@ def extract_products_html(html, site_cfg):
         in_stock = detect_html_in_stock(item)
         uid = hashlib.md5(f"{title}{link}".encode()).hexdigest()
         products.append({"uid": uid, "title": title, "link": link, "price": price, "in_stock": in_stock})
-    return products
+
+    # Un elemento sin título es inservible: los bots filtran por keyword sobre el
+    # título, así que nunca casaría. Si NINGUNO tiene título, los selectores están
+    # obsoletos y la tienda está ciega: fallar para que salte el aviso de salud,
+    # en vez de aparentar "0 productos relevantes" para siempre.
+    usable = [p for p in products if p["title"] and p["title"] != "Sin título"]
+    if products and not usable:
+        raise ValueError(
+            f"selectores obsoletos: {len(products)} elementos, ninguno con título"
+        )
+    if len(usable) < len(products):
+        log.warning(
+            f"  {len(products) - len(usable)} de {len(products)} elementos sin título "
+            f"(title_selector incompleto), descartados"
+        )
+    return usable
 
 
 def extract_products_api(data, base_url=""):
