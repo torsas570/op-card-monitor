@@ -210,9 +210,9 @@
             "priority": "medium"
         },
         {
-            "_comment": "=== PrestaShop: sin 'resultsPerPage' solo se lee la PAGINA 1 (24 productos). Con 100 se ve la categoria entera. ===",
+            "_comment": "=== PrestaShop: sin 'resultsPerPage' solo se lee la PAGINA 1 (24 productos). Con 200 cabe la categoria entera (La Cueva Roja tiene 119) y ademas, al no llegar al tope, se activa la deteccion de desapariciones. ===",
             "name": "Dungeon Marvels",
-            "url": "https://dungeonmarvels.com/1106-one-piece-card-game?resultsPerPage=100&order=product.date_add.desc",
+            "url": "https://dungeonmarvels.com/1106-one-piece-card-game?resultsPerPage=200&order=product.date_add.desc",
             "type": "html",
             "priority": "high",
             "selector": "#js-product-list .product-miniature",
@@ -222,7 +222,7 @@
         },
         {
             "name": "Distrito Zero",
-            "url": "https://distritozero.es/categoria/one-piece-632?resultsPerPage=100&order=product.date_add.desc",
+            "url": "https://distritozero.es/categoria/one-piece-632?resultsPerPage=200&order=product.date_add.desc",
             "type": "html",
             "priority": "high",
             "selector": "#js-product-list .product-miniature",
@@ -232,7 +232,7 @@
         },
         {
             "name": "La Cueva Roja",
-            "url": "https://lacuevaroja.com/one-piece-card-game?resultsPerPage=100&order=product.date_add.desc",
+            "url": "https://lacuevaroja.com/one-piece-card-game?resultsPerPage=200&order=product.date_add.desc",
             "type": "html",
             "priority": "high",
             "selector": "#js-product-list .product-miniature",

@@ -20,6 +20,18 @@ Features:
   cuando antes tenía— avisa una vez (y otra al recuperarse) en vez de quedarse
   ciego en silencio.
 - Telegram robusto: escapado de HTML, troceo a 4096 caracteres y reintentos.
+
+Cómo se decide si un producto está AGOTADO, según el motor:
+- Shopify: `available` por variante. Es la verdad del inventario. Las preventas
+  salen `available: false` hasta que abren, así que abrir reserva = 🔄 RESTOCK.
+- WooCommerce Store API: `is_in_stock` (+ `stock_availability.text`, que dice
+  cuántas quedan, y `is_on_backorder`). `is_purchasable` NO sirve: devuelve true
+  incluso con el producto agotado.
+- HTML: `detect_html_stock_signal` en tres señales negativas (clase de agotado en
+  cualquier descendiente, carrito deshabilitado, texto en varios idiomas) y una
+  positiva (carrito activo). Las negativas MANDAN: hay temas que pintan un
+  "Add to Cart" activo también en lo agotado. Si un listado no enseña carrito en
+  ningún producto, no informa del stock y se asume disponible.
 """
 
 import json
@@ -31,7 +43,7 @@ import sys
 import argparse
 import html as html_mod
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
@@ -51,7 +63,28 @@ CONFIG_PATH = BASE_DIR / "config.json"
 STATE_PATH = BASE_DIR / "state.json"
 
 PRIORITY_EMOJI = {"high": "🚨", "medium": "📦", "low": "🔍"}
-OOS_KEYWORDS = ["agotado", "sold out", "out of stock", "vendido", "no disponible", "rupture de stock"]
+# Vocabulario para leer el stock en los listados HTML. "agotad" cubre
+# agotado/agotada/agotados/agotadas; el resto son las formas que de verdad usan
+# las tiendas del config (La Cueva Roja dice "Fuera de stock", no "out of stock").
+OOS_KEYWORDS = [
+    "agotad", "fuera de stock", "sin existencias", "sin stock",
+    "no disponible", "sold out", "out of stock", "vendido",
+    "rupture de stock", "esgotado", "esaurito", "ausverkauft", "uitverkocht",
+]
+# El marcador casi nunca esta en la raiz de la miniatura: PrestaShop lo cuelga de
+# un <span class="product-flag out_of_stock"> hijo, y Dungeon Marvels usa
+# "soy_agotado" en el propio boton. Ojo al guion BAJO: la lista vieja solo
+# miraba "out-of-stock" con guion y por eso La Cueva Roja salia siempre disponible.
+OOS_CLASS_TOKENS = [
+    "out-of-stock", "out_of_stock", "outofstock",
+    "sold-out", "sold_out", "soldout",
+    "agotado", "product-unavailable", "no-stock", "nostock",
+]
+CART_CLASS_TOKENS = ["add-to-cart", "add_to_cart", "addtocart", "ajax_add_to_cart"]
+CART_TEXT_TOKENS = [
+    "anadir al carrito", "añadir al carrito", "añadir a la cesta",
+    "add to cart", "add to basket", "aggiungi al carrello", "ajouter au panier",
+]
 
 HEALTH_KEY = "__health__"  # clave reservada en state para la salud (no es un sitio)
 DEFAULT_HEALTH_FAIL_THRESHOLD = 3  # fallos seguidos antes de avisar de bloqueo/caída
@@ -146,20 +179,67 @@ def build_headers(user_agent, is_api=False):
     return headers
 
 
-def detect_html_in_stock(item):
-    classes = " ".join(item.get("class", [])).lower()
-    if any(k in classes for k in ["out-of-stock", "sold-out", "outofstock", "agotado"]):
+def _is_disabled(el):
+    if el.has_attr("disabled") or el.get("aria-disabled") == "true":
+        return True
+    return "disabled" in " ".join(el.get("class", [])).lower()
+
+
+def _cart_controls(item):
+    """Botones/enlaces de "anadir al carrito" dentro de la miniatura."""
+    controls = []
+    for el in item.select("button, a, input"):
+        classes = " ".join(el.get("class", [])).lower()
+        # La lista de deseos tambien es un boton con "add" en la clase: fuera.
+        if "wishlist" in classes or "compare" in classes:
+            continue
+        text = el.get_text(" ", strip=True).lower()
+        if any(t in classes for t in CART_CLASS_TOKENS) or any(t in text for t in CART_TEXT_TOKENS):
+            controls.append(el)
+    return controls
+
+
+def detect_html_stock_signal(item):
+    """Tri-estado: False = agotado, True = en stock, None = el listado no lo dice.
+
+    Las senales NEGATIVAS mandan sobre las positivas: hay temas (Dungeon Marvels)
+    que pintan un "Add to Cart" activo tambien en los productos agotados, asi que
+    fiarse del boton positivo antes de mirar los marcadores seria un error.
+    """
+    # 1. Clase de agotado en la propia miniatura o en CUALQUIER descendiente.
+    for el in [item] + item.select("[class]"):
+        classes = " ".join(el.get("class", [])).lower()
+        if any(t in classes for t in OOS_CLASS_TOKENS):
+            return False
+
+    # 2. Boton de carrito deshabilitado: la senal mas fiable y sin idioma.
+    controls = _cart_controls(item)
+    if controls and all(_is_disabled(c) for c in controls):
         return False
-    text = item.get_text(" ", strip=True).lower()
-    if any(k in text for k in OOS_KEYWORDS):
+
+    # 3. Texto de agotado, en los idiomas de las tiendas del config.
+    if any(k in item.get_text(" ", strip=True).lower() for k in OOS_KEYWORDS):
         return False
-    return True
+
+    # 4. Marca POSITIVA: hay carrito y esta activo.
+    if controls:
+        return True
+    return None
 
 
 def extract_products_html(html, site_cfg):
     soup = BeautifulSoup(html, "html.parser")
+    items = soup.select(site_cfg["selector"])
+    signals = [detect_html_stock_signal(it) for it in items]
+
+    # Calibracion POR LISTADO: si el tema pinta carrito activo en algun producto,
+    # entonces uno que no lo tenga esta agotado. Si no lo pinta en NINGUNO (Isekai
+    # no saca botones en la miniatura), el listado no informa del stock y se asume
+    # disponible, que es lo unico que se puede hacer sin inventarse datos.
+    tiene_marca_positiva = any(s is True for s in signals)
+
     products = []
-    for item in soup.select(site_cfg["selector"]):
+    for item, signal in zip(items, signals):
         title_el = item.select_one(site_cfg["title_selector"])
         title = title_el.get_text(strip=True) if title_el else "Sin título"
         link_el = item.select_one(site_cfg["link_selector"])
@@ -168,9 +248,21 @@ def extract_products_html(html, site_cfg):
             link = urljoin(site_cfg["url"], link)
         price_el = item.select_one(site_cfg["price_selector"])
         price = price_el.get_text(strip=True) if price_el else "Precio no disponible"
-        in_stock = detect_html_in_stock(item)
+        in_stock = signal if signal is not None else not tiene_marca_positiva
         uid = hashlib.md5(f"{title}{link}".encode()).hexdigest()
-        products.append({"uid": uid, "title": title, "link": link, "price": price, "in_stock": in_stock})
+        products.append({"uid": uid, "title": title, "link": link, "price": price,
+                         "in_stock": in_stock, "stock_text": "", "backorder": False})
+
+    if items:
+        n_oos = sum(1 for p in products if not p["in_stock"])
+        n_ciegos = sum(1 for s in signals if s is None)
+        log.info(f"  stock HTML: {len(items) - n_oos} disponibles / {n_oos} agotados"
+                 + (f" ({n_ciegos} sin senal, marca positiva en el listado: "
+                    f"{'si' if tiene_marca_positiva else 'no'})" if n_ciegos else ""))
+        if n_oos == len(items) and len(items) > 5:
+            # Puede ser real, pero tambien un cambio de tema que marque todo agotado:
+            # con notify_only_in_stock eso deja la tienda muda sin fallar.
+            log.warning(f"  el listado entero sale AGOTADO ({len(items)}), revisar si es real")
 
     # Un elemento sin título es inservible: los bots filtran por keyword sobre el
     # título, así que nunca casaría. Si NINGUNO tiene título, los selectores están
@@ -212,7 +304,8 @@ def extract_products_api(data, base_url="", currency="€"):
                     price = f"{p_raw}{currency}"
                 in_stock = any(v.get("available", False) for v in variants)
             uid = hashlib.md5(f"{item.get('id', '')}{title}".encode()).hexdigest()
-            products.append({"uid": uid, "title": title, "link": link, "price": price, "in_stock": in_stock})
+            products.append({"uid": uid, "title": title, "link": link, "price": price,
+                             "in_stock": in_stock, "stock_text": "", "backorder": False})
         return products
 
     items = data if isinstance(data, list) else data.get("products", [])
@@ -227,8 +320,17 @@ def extract_products_api(data, base_url="", currency="€"):
         except (ValueError, TypeError):
             price = "Precio no disponible"
         in_stock = item.get("is_in_stock", item.get("has_stock", True))
+        # La Store API dice cuantas quedan ("Solo quedan 1 disponibles"), que en un
+        # bot de restock vale tanto como el propio aviso. is_purchasable NO sirve:
+        # las cuatro tiendas lo devuelven true incluso con el producto agotado.
+        availability = item.get("stock_availability") or {}
+        stock_text = ""
+        if isinstance(availability, dict):
+            stock_text = html_mod.unescape(availability.get("text") or "")
         uid = hashlib.md5(f"{item.get('id', '')}{title}".encode()).hexdigest()
-        products.append({"uid": uid, "title": title, "link": link, "price": price, "in_stock": in_stock})
+        products.append({"uid": uid, "title": title, "link": link, "price": price,
+                         "in_stock": in_stock, "stock_text": stock_text,
+                         "backorder": bool(item.get("is_on_backorder"))})
     return products
 
 
@@ -281,6 +383,23 @@ def send_telegram(bot_token, chat_id, message):
             time.sleep(2)
         else:
             log.error("Telegram: agotados los reintentos, aviso PERDIDO")
+
+
+def requested_cap(url):
+    """Tope de resultados que pide la URL (limit / per_page / resultsPerPage).
+
+    Si el listado vuelve LLENO hasta el tope, lo que sobra entra y sale entre
+    pasadas segun el orden de la tienda: ahi no se puede deducir nada de que un
+    producto "desaparezca".
+    """
+    query = parse_qs(urlparse(url).query)
+    for key, values in query.items():
+        if key.lower() in ("limit", "per_page", "resultsperpage") and values:
+            try:
+                return int(values[0])
+            except (TypeError, ValueError):
+                pass
+    return None
 
 
 def matches_keywords(title, keywords):
@@ -367,6 +486,10 @@ def check_site(site_cfg, state, config):
 
     _record_health(state, name, ok=True)
 
+    # El tope se mide sobre el listado CRUDO, antes de filtrar por keywords.
+    cap = requested_cap(url)
+    truncado = cap is not None and len(products) >= cap
+
     if include_keywords or exclude_keywords:
         filtered = [
             p for p in products
@@ -377,6 +500,9 @@ def check_site(site_cfg, state, config):
         products = filtered
     else:
         log.info(f"  {name}: {len(products)} productos encontrados")
+    if truncado:
+        log.warning(f"  {name}: listado LLENO hasta el tope ({cap}), puede haber "
+                    f"productos fuera; no se miran desapariciones")
 
     if not products:
         return [], 0
@@ -394,11 +520,34 @@ def check_site(site_cfg, state, config):
                 alerts.append({**p, "alert_type": "restock"})
         site_state[uid] = {"in_stock": p["in_stock"]}
 
-    state[name] = site_state
-
     if is_first_run:
+        state[name] = site_state
         log.info(f"  {name}: primera ejecución, guardando baseline de {len(products)} productos")
         return [], 0
+
+    # Tiendas que OCULTAN del listado lo que se agota (Isekai Alcorcón): alli el
+    # restock es que el producto REAPARECE. Como el uid no cambia y en el state
+    # seguia como disponible, no saltaba nada. Marcandolo agotado al desaparecer,
+    # la reaparicion dispara el 🔄 RESTOCK por el camino normal.
+    # No se aplica con el listado al tope (rotarian productos y darian falsos
+    # restocks) ni cuando desaparece media tienda de golpe (listado anomalo).
+    if not truncado:
+        vistos = {p["uid"] for p in products}
+        desaparecidos = [
+            uid for uid, prev in site_state.items()
+            if uid not in vistos and prev.get("in_stock", True)
+        ]
+        limite = max(5, len(products) // 2)
+        if len(desaparecidos) > limite:
+            log.warning(f"  {name}: {len(desaparecidos)} productos desaparecidos de golpe "
+                        f"(> {limite}), listado anómalo: no se marcan")
+        elif desaparecidos:
+            for uid in desaparecidos:
+                site_state[uid] = {"in_stock": False, "gone": True}
+            log.info(f"  {name}: {len(desaparecidos)} desaparecidos del listado, "
+                     f"marcados agotados (avisarán si reaparecen)")
+
+    state[name] = site_state
 
     # Una tienda no publica 20 novedades reales en una pasada de 2 minutos. Si pasa,
     # es que ha recatalogado, ha cambiado el orden de la colección o hemos ampliado
@@ -432,7 +581,14 @@ def format_notification(site_name, priority, alerts):
         # Escapado obligatorio: un '&' o un '<' en el título rompe el parse_mode
         # HTML y Telegram devuelve 400 -> el aviso entero se perdería.
         lines.append(f"• {tag}{stock} <b>{html_mod.escape(p['title'])}</b>")
-        lines.append(f"  💰 {html_mod.escape(p['price'])}")
+        precio = f"  💰 {html_mod.escape(p['price'])}"
+        if p.get("backorder"):
+            precio += " ⏳ bajo pedido"
+        lines.append(precio)
+        # "Solo quedan 1 disponibles" — lo da la Store API de WooCommerce. Solo
+        # tiene sentido enseñarlo si está disponible: si no, ya lo dice AGOTADO.
+        if p.get("stock_text") and p["in_stock"]:
+            lines.append(f"  📊 {html_mod.escape(p['stock_text'])}")
         if p["link"]:
             lines.append(f"  🔗 {p['link']}")
         lines.append("")
