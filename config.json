@@ -3,21 +3,35 @@
     "telegram_chat_id": "TU_CHAT_ID_AQUI",
     "check_interval_minutes": 15,
     "notify_only_in_stock": true,
+    "health_fail_threshold": 3,
+    "resync_threshold": 20,
     "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "_comment_prioridad_producto": "Ordena y marca los avisos. No filtra nada: todo lo de estas colecciones es One Piece.",
+    "high_value_keywords": [
+        "case", "booster box", "display", "caja de sobres", "caja sobres",
+        "booster case", "sealed case", "box case", "carton"
+    ],
+    "promo_keywords": [
+        "promo", "promotional", "saikyo", "v jump", "vjump", "magazine",
+        "championship", "tournament", "anniversary", "aniversario"
+    ],
     "sites": [
         {
             "name": "Montalfan",
             "url": "https://montalfan.com/categoria-producto/one-piece-card-game/?orderby=date",
             "type": "html",
+            "priority": "high",
             "selector": "li.product",
             "title_selector": ".woocommerce-loop-product__title",
             "link_selector": "a",
             "price_selector": ".price"
         },
         {
+            "_comment": "Categoria 'cajas' = solo sellado, 21 productos (sin paginacion).",
             "name": "Isekai Alcorcon",
             "url": "https://isekai-alcorcon.es/es/c/cajas/110",
             "type": "html",
+            "priority": "high",
             "selector": ".product-miniature",
             "title_selector": ".product-title",
             "link_selector": "a",
@@ -25,149 +39,182 @@
         },
         {
             "name": "Empire Games",
-            "url": "https://www.empiregames.es/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
-            "type": "api"
+            "url": "https://www.empiregames.es/wp-json/wc/store/v1/products?per_page=100&search=one+piece&orderby=date",
+            "type": "api",
+            "priority": "high"
         },
         {
             "name": "AllInTCG",
-            "url": "https://allintcg.com/collections/one-piece-card-game-booster-boxes/products.json?limit=50",
-            "type": "api"
+            "url": "https://allintcg.com/collections/one-piece-card-game-booster-boxes/products.json?limit=250",
+            "type": "api",
+            "priority": "high"
         },
         {
             "name": "FreakCorp",
-            "url": "https://freakcorp.com/collections/one-piece-card-game/products.json?limit=50",
-            "type": "api"
+            "url": "https://freakcorp.com/collections/one-piece-card-game/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Only Cards",
-            "url": "https://www.only-cards.com/wp-json/wc/store/v1/products?per_page=50&category=956",
-            "type": "api"
+            "url": "https://www.only-cards.com/wp-json/wc/store/v1/products?per_page=100&category=956",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "TodoHits",
-            "url": "https://todohits.com/collections/one-piece/products.json?limit=50",
-            "type": "api"
+            "url": "https://todohits.com/collections/one-piece/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "JJ Collection",
-            "url": "https://www.jjcollection.es/collections/one-piece-card/products.json?limit=50",
-            "type": "api"
+            "url": "https://www.jjcollection.es/collections/one-piece-card/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "CardZone",
-            "url": "https://cardzone.es/collections/one-piece-tcg/products.json?limit=50",
-            "type": "api"
+            "url": "https://cardzone.es/collections/one-piece-tcg/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "La Escotilla",
-            "url": "https://laescotillajuegos.com/collections/one-piece-tcg/products.json?limit=50",
-            "type": "api"
+            "url": "https://laescotillajuegos.com/collections/one-piece-tcg/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "TCG Level",
-            "url": "https://tcglevel.com/collections/one-piece/products.json?limit=50",
-            "type": "api"
+            "url": "https://tcglevel.com/collections/one-piece/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Kantocards",
-            "url": "https://kantocards.com/collections/one-piece/products.json?limit=50",
-            "type": "api"
+            "url": "https://kantocards.com/collections/one-piece/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Europe TCG",
-            "url": "https://europetcg.com/en/collections/one-piece/products.json?limit=50",
-            "type": "api"
+            "url": "https://europetcg.com/en/collections/one-piece/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Otakura (IT)",
             "url": "https://otakura.com/en/collections/one-piece-card-game/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Universe TCG (ES)",
             "url": "https://www.universetcg.com/collections/one-piece-card-game/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "high"
         },
         {
             "name": "TCGHOBBY (TW)",
             "url": "https://www.tcghobby.com/collections/one-piece/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "medium",
+            "currency": "$"
         },
         {
             "name": "Pixel and Block (UK)",
             "url": "https://pixelandblock.co.uk/collections/one-piece/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "medium",
+            "currency": "£"
         },
         {
             "name": "Monster Card Corner (UK)",
             "url": "https://monstercardcorner.co.uk/collections/one-piece/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "medium",
+            "currency": "£"
         },
         {
             "name": "Pokemillon (Cajas OP)",
             "url": "https://www.pokemillon.com/collections/caja-one-piece/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "high"
         },
         {
             "name": "Pokemillon (Sobres OP)",
             "url": "https://www.pokemillon.com/collections/sobres-one-piece/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Pokemillon (Mazos OP)",
             "url": "https://www.pokemillon.com/collections/mazos-y-barajas-one-piece/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "medium"
         },
         {
-            "_comment": "=== Sunny Store (Shopify ES) — colecciones de SELLADO. La colección 'one-piece' (1063) es casi toda singles y spamearía. ===",
+            "_comment": "=== Sunny Store (Shopify ES) — colecciones de SELLADO. La coleccion 'one-piece' (1063) es casi toda singles y spamearia. ===",
             "name": "Sunny Store (Cajas OP ENG)",
             "url": "https://sunnystore.es/collections/cajas-one-piece-ingles/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "high"
         },
         {
             "name": "Sunny Store (Cajas OP JAP)",
             "url": "https://sunnystore.es/collections/cajas-one-piece-japones/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "high"
         },
         {
             "name": "Sunny Store (Sobres OP ENG)",
             "url": "https://sunnystore.es/collections/sobres-one-piece-ingles/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Sunny Store (Sobres OP JAP)",
             "url": "https://sunnystore.es/collections/sobres-japones-one-piece/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Mono de Juegos",
-            "url": "https://www.monodejuegos.shop/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
-            "type": "api"
+            "url": "https://www.monodejuegos.shop/wp-json/wc/store/v1/products?per_page=100&search=one+piece&orderby=date",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "ELIUS",
-            "url": "https://www.eliusweb.com/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
-            "type": "api"
+            "url": "https://www.eliusweb.com/wp-json/wc/store/v1/products?per_page=100&search=one+piece&orderby=date",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Friki de Nacimiento",
-            "url": "https://frikidenacimiento.es/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
-            "type": "api"
+            "url": "https://frikidenacimiento.es/wp-json/wc/store/v1/products?per_page=100&search=one+piece&orderby=date",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Friki Galaxy",
-            "url": "https://frikigalaxy.com/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
-            "type": "api"
+            "url": "https://frikigalaxy.com/wp-json/wc/store/v1/products?per_page=100&search=one+piece&orderby=date",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Tienda Mulligan",
-            "url": "https://shop.tiendamulligan.com/wp-json/wc/store/v1/products?per_page=50&search=one+piece&orderby=date",
-            "type": "api"
+            "url": "https://shop.tiendamulligan.com/wp-json/wc/store/v1/products?per_page=100&search=one+piece&orderby=date",
+            "type": "api",
+            "priority": "medium"
         },
         {
+            "_comment": "=== PrestaShop: sin 'resultsPerPage' solo se lee la PAGINA 1 (24 productos). Con 100 se ve la categoria entera. ===",
             "name": "Dungeon Marvels",
-            "url": "https://dungeonmarvels.com/1106-one-piece-card-game",
+            "url": "https://dungeonmarvels.com/1106-one-piece-card-game?resultsPerPage=100&order=product.date_add.desc",
             "type": "html",
+            "priority": "high",
             "selector": "#js-product-list .product-miniature",
             "title_selector": ".product-title",
             "link_selector": "a",
@@ -175,8 +222,9 @@
         },
         {
             "name": "Distrito Zero",
-            "url": "https://distritozero.es/categoria/one-piece-632",
+            "url": "https://distritozero.es/categoria/one-piece-632?resultsPerPage=100&order=product.date_add.desc",
             "type": "html",
+            "priority": "high",
             "selector": "#js-product-list .product-miniature",
             "title_selector": ".product-title",
             "link_selector": "a",
@@ -184,8 +232,9 @@
         },
         {
             "name": "La Cueva Roja",
-            "url": "https://lacuevaroja.com/one-piece-card-game",
+            "url": "https://lacuevaroja.com/one-piece-card-game?resultsPerPage=100&order=product.date_add.desc",
             "type": "html",
+            "priority": "high",
             "selector": "#js-product-list .product-miniature",
             "title_selector": ".product-title",
             "link_selector": "a",
@@ -193,28 +242,75 @@
         },
         {
             "name": "JumpIchiban (JP promo)",
-            "url": "https://jumpichiban.com/collections/one-piece-card-game-promo-and-special-cards/products.json?limit=50",
-            "type": "api"
+            "url": "https://jumpichiban.com/collections/one-piece-card-game-promo-and-special-cards/products.json?limit=250",
+            "type": "api",
+            "priority": "medium",
+            "currency": "$"
         },
         {
             "name": "CardOtaku (JP promo)",
-            "url": "https://cardotaku.com/collections/one-piece-card-game-promotional-cards/products.json?limit=50",
-            "type": "api"
+            "url": "https://cardotaku.com/collections/one-piece-card-game-promotional-cards/products.json?limit=250",
+            "type": "api",
+            "priority": "medium",
+            "currency": "¥"
         },
         {
             "name": "TCG Corner (JP promo)",
-            "url": "https://tcg-corner.com/collections/one-piece-promo-card/products.json?limit=50",
-            "type": "api"
+            "url": "https://tcg-corner.com/collections/one-piece-promo-card/products.json?limit=250",
+            "type": "api",
+            "priority": "medium",
+            "currency": "$"
         },
         {
             "name": "Fuji Card Shop (JP)",
-            "url": "https://www.fujicardshop.com/wp-json/wc/store/v1/products?per_page=50&category=432&orderby=date",
-            "type": "api"
+            "url": "https://www.fujicardshop.com/wp-json/wc/store/v1/products?per_page=100&category=432&orderby=date",
+            "type": "api",
+            "priority": "medium"
         },
         {
             "name": "Evolution TCG (NL)",
             "url": "https://evlutcg.com/collections/one-piece-booster-boxes-cases/products.json?limit=250",
-            "type": "api"
+            "type": "api",
+            "priority": "high"
+        },
+        {
+            "_comment": "=== Card Binder (Shopify, EUR) — anadida sep-2026. Las colecciones '-live' son sobres para live-stream (ruido), no se usan. ===",
+            "name": "Card Binder (Cajas OP)",
+            "url": "https://card-binder.com/collections/one-piece-booster-boxes/products.json?limit=250",
+            "type": "api",
+            "priority": "high"
+        },
+        {
+            "name": "Card Binder (OP)",
+            "url": "https://card-binder.com/collections/one-piece-card-game/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
+        },
+        {
+            "name": "Card Binder (Promos OP)",
+            "url": "https://card-binder.com/collections/one-piece-promo-english-and-japanese/products.json?limit=250",
+            "type": "api",
+            "priority": "medium"
+        },
+        {
+            "_comment": "=== Fridam Store (Shopify ES) — anadida sep-2026. Sus colecciones de sellado devuelven products.json VACIO (solo existen en HTML), asi que se usa la coleccion grande 'one-piece-tcg' (166) filtrando el sellado: 107 de los 166 son singles, PSA, figuras y playmats. ===",
+            "name": "Fridam Store (OP sellado)",
+            "url": "https://fridamstore.com/collections/one-piece-tcg/products.json?limit=250",
+            "type": "api",
+            "priority": "high",
+            "include_keywords": [
+                "box", "case", "booster", "display", "sobre", "deck", "preorder",
+                "bundle", "sealed", "tin", "premium"
+            ],
+            "exclude_keywords": ["psa", "playmat", "figure", "banpresto", "sleeve", "deck box"]
+        },
+        {
+            "_comment": "=== Micelion Games (WooCommerce Store API) — anadida sep-2026. La categoria 28 mezcla 28 inscripciones de torneo con los 60 productos reales. ===",
+            "name": "Micelion Games",
+            "url": "https://miceliongames.com/wp-json/wc/store/v1/products?per_page=100&category=28&orderby=date",
+            "type": "api",
+            "priority": "high",
+            "exclude_keywords": ["inscripcion", "inscripción", "torneo", "picking", "win a box"]
         }
     ]
 }

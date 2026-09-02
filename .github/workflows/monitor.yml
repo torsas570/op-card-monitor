@@ -1,8 +1,12 @@
 name: Monitor One Piece Card Game
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'  # Cada 15 minutos
+  # CRON DESACTIVADO: lo cubre monitor-continuo.yml, que recorre TODAS las tiendas
+  # cada ~1-2 min. Ademas GitHub estrangula los schedule frecuentes: este '*/15'
+  # disparaba de verdad cada ~4 h (medido 2-sep-2026: 01:01, 05:49, 10:45, 14:59,
+  # 18:33 UTC). Se deja lanzable a mano para pruebas.
+  # schedule:
+  #   - cron: '*/15 * * * *'
   workflow_dispatch:
 
 jobs:

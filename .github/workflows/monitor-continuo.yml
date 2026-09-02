@@ -1,0 +1,68 @@
+name: Monitor One Piece - CONTINUO (~1 check/min, todas las tiendas)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Red de seguridad: si la cadena se rompe, esto rearranca el bucle.
+    # Minutos "raros" para esquivar la congestion del :00.
+    # (GitHub estrangula los schedule frecuentes: este cron dispara cada varias
+    #  horas en la practica, por eso la cadencia real la da el bucle, no el cron.)
+    - cron: '13,43 * * * *'
+
+# Solo un bloque a la vez. El nuevo run espera a que acabe el actual (relevo
+# sin carrera del state.json). GitHub mantiene como mucho 1 corriendo + 1 en cola.
+concurrency:
+  group: monitor-continuo-op
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write   # necesario para que 'gh workflow run' relance el workflow
+
+jobs:
+  loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # tope de 6h de Actions; salimos antes por tiempo del bucle
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - uses: actions/cache/restore@v5
+        with:
+          path: state.json
+          key: monitor-state-${{ github.run_id }}
+          restore-keys: monitor-state-
+
+      - name: Bucle continuo (~1 check/min durante ~5h30m)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          # Bucle acotado por TIEMPO (no por nº de pasadas): corre ~5h30m y sale
+          # limpio para guardar estado y encadenar el siguiente bloque.
+          END=$(( $(date +%s) + 5*3600 + 30*60 ))
+          i=0
+          while [ "$(date +%s)" -lt "$END" ]; do
+            i=$((i+1))
+            echo "== Pasada $i =="
+            python3 monitor.py || echo "Pasada $i fallo, continuo con la siguiente"
+            # Jitter 60-105s: cadencia ~1-2 min por tienda e IRREGULAR (menos "cara
+            # de bot" que un intervalo fijo) -> menor riesgo de bloqueo de IP.
+            sleep $((60 + RANDOM % 46))
+          done
+          echo "Bloque terminado tras $i pasadas."
+
+      - name: Guardar estado
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: state.json
+          key: monitor-state-${{ github.run_id }}
+
+      - name: Encadenar el siguiente bloque (auto-relanzado)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run monitor-continuo.yml --ref master
