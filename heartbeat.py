@@ -3,7 +3,7 @@
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -21,7 +21,7 @@ state = json.load(open(STATE_PATH)) if STATE_PATH.exists() else {}
 
 health = state.get(HEALTH_KEY, {})
 # __health__ no es una tienda: si se cuenta, infla el nº de tiendas y de productos.
-sites_state = {k: v for k, v in state.items() if k != HEALTH_KEY}
+sites_state = {k: v for k, v in state.items() if k not in (HEALTH_KEY, "__health_meta__")}
 
 n_sites_cfg = len(CONFIG["sites"])
 n_sites_tracked = len(sites_state)
@@ -42,7 +42,7 @@ sin_datos = [s["name"] for s in CONFIG["sites"] if s["name"] not in sites_state]
 
 lines = [
     "💓 <b>Heartbeat One Piece Card Game</b>",
-    f"📅 {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
+    f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
     "",
     "✅ Bot vivo y funcionando",
     f"🏪 Tiendas configuradas: {n_sites_cfg}",
