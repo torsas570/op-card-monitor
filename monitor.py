@@ -310,9 +310,14 @@ def extract_products_html(html, site_cfg):
         price_el = item.select_one(site_cfg["price_selector"])
         price = price_el.get_text(strip=True) if price_el else "Precio no disponible"
         in_stock = signal if signal is not None else not tiene_marca_positiva
-        uid = hashlib.md5(f"{title}{link}".encode()).hexdigest()
-        products.append({"uid": uid, "title": title, "link": link, "price": price,
-                         "in_stock": in_stock, "stock_text": "", "backorder": False})
+        # uid ESTABLE: el enlace, que sobrevive a que la tienda retoque el título.
+        # Antes el uid incluía el título, así que un retoque hacía parecer NUEVO al
+        # producto y el mismo enlace se avisaba otra vez horas después.
+        uid = hashlib.md5((link or f"{title}").encode()).hexdigest()
+        legacy = hashlib.md5(f"{title}{link}".encode()).hexdigest()
+        products.append({"uid": uid, "legacy_uid": legacy, "title": title, "link": link,
+                         "price": price, "in_stock": in_stock, "stock_text": "",
+                         "backorder": False})
 
     if items:
         n_oos = sum(1 for p in products if not p["in_stock"])
@@ -364,9 +369,13 @@ def extract_products_api(data, base_url="", currency="€"):
                     # de la tienda (por defecto €), que es cosmético — el link es el bueno.
                     price = f"{p_raw}{currency}"
                 in_stock = any(v.get("available", False) for v in variants)
-            uid = hashlib.md5(f"{item.get('id', '')}{title}".encode()).hexdigest()
-            products.append({"uid": uid, "title": title, "link": link, "price": price,
-                             "in_stock": in_stock, "stock_text": "", "backorder": False})
+            pid = item.get("id", "")
+            uid = hashlib.md5(f"shopify:{pid}".encode()).hexdigest() if pid else \
+                hashlib.md5(f"{pid}{title}".encode()).hexdigest()
+            legacy = hashlib.md5(f"{pid}{title}".encode()).hexdigest()
+            products.append({"uid": uid, "legacy_uid": legacy, "title": title, "link": link,
+                             "price": price, "in_stock": in_stock, "stock_text": "",
+                             "backorder": False})
         return products
 
     items = data if isinstance(data, list) else data.get("products", [])
@@ -388,9 +397,12 @@ def extract_products_api(data, base_url="", currency="€"):
         stock_text = ""
         if isinstance(availability, dict):
             stock_text = html_mod.unescape(availability.get("text") or "")
-        uid = hashlib.md5(f"{item.get('id', '')}{title}".encode()).hexdigest()
-        products.append({"uid": uid, "title": title, "link": link, "price": price,
-                         "in_stock": in_stock, "stock_text": stock_text,
+        pid = item.get("id", "")
+        uid = hashlib.md5(f"woo:{pid}".encode()).hexdigest() if pid else \
+            hashlib.md5(f"{pid}{title}".encode()).hexdigest()
+        legacy = hashlib.md5(f"{pid}{title}".encode()).hexdigest()
+        products.append({"uid": uid, "legacy_uid": legacy, "title": title, "link": link,
+                         "price": price, "in_stock": in_stock, "stock_text": stock_text,
                          "backorder": bool(item.get("is_on_backorder"))})
     return products
 
@@ -634,6 +646,11 @@ def process_site(site_cfg, products, state, config):
     for p in products:
         uid = p["uid"]
         prev = site_state.get(uid)
+        if prev is None and p.get("legacy_uid"):
+            # Migración silenciosa del esquema viejo de uid: si el producto ya estaba
+            # con la clave antigua se hereda su estado y se reescribe con la nueva.
+            # Sin esto, el cambio de esquema haría parecer NUEVO todo el catálogo.
+            prev = site_state.pop(p["legacy_uid"], None)
         if prev is None:
             if not is_first_run:
                 if p["in_stock"] or not notify_only_in_stock:
@@ -654,7 +671,7 @@ def process_site(site_cfg, products, state, config):
     # No se aplica con el listado al tope (rotarían productos y darían falsos
     # restocks) ni cuando desaparece media tienda de golpe (listado anómalo).
     if not truncado:
-        vistos = {p["uid"] for p in products}
+        vistos = {p["uid"] for p in products} | {p.get("legacy_uid") for p in products}
         desaparecidos = [
             uid for uid, prev in site_state.items()
             if uid not in vistos and prev.get("in_stock", True)
