@@ -1,0 +1,12 @@
+name: probe-tmp
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
+          for u in "https://geekkaos.com/26-one-piece-tcg?resultsPerPage=200&order=product.date_add.desc" "https://geekkaos.com/27-pokemon-tcg?resultsPerPage=200&order=product.date_add.desc" "https://geekkaos.com/busqueda?controller=search&s=naruto+tcg&resultsPerPage=200&order=product.date_add.desc" "https://madridnortetcg.com/collections/one-piece-tcg/products.json?limit=250" "https://metropolis-center.com/es/catalogo/juegos-de-cartas/one-piece"; do
+            curl -s -m 30 -A "$UA" -H "Accept-Language: es-ES,es;q=0.9" -o out.html -w "%{http_code} " "$u"
+            echo "miniatures=$(grep -c 'js-product-miniature' out.html) json=$(grep -o '"product_type"' out.html | wc -l) $u"
+          done
