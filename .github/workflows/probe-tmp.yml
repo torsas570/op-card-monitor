@@ -1,0 +1,15 @@
+name: probe-tmp
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
+          for u in "https://pinkork.es/89-one-piece-tcg?resultsPerPage=500&order=product.date_add.desc" "https://pinkork.es/81-pokemon-tcg?resultsPerPage=500&order=product.date_add.desc" "https://pinkork.es/158-dragon-ball-tcg?resultsPerPage=500&order=product.date_add.desc" "https://pinkork.es/busqueda?controller=search&s=naruto&resultsPerPage=500&order=product.date_add.desc" "https://manavortex.es/wp-json/wc/store/v1/products?per_page=100&search=one+piece&orderby=date"; do
+            for i in 1 2 3; do
+              curl -s -m 30 -A "$UA" -H "Accept-Language: es-ES,es;q=0.9" -o out.html -w "RESULT %{http_code} %{content_type} " "$u"
+              echo "miniatures=$(grep -c 'js-product-miniature' out.html) json_ids=$(grep -o '"id":' out.html | wc -l) $u"
+              sleep 3
+            done
+          done
