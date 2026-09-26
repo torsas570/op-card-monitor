@@ -21,8 +21,8 @@ jobs:
               for u in URLS:
                 try:
                   r=pg.goto(u,timeout=45000); st=r.status if r else None
-                  for _ in range(20):
-                    if "Just a moment" not in pg.title(): break
+                  for _ in range(30):
+                    if "moment" not in pg.title().lower(): break
                     time.sleep(1.5)
                   n=pg.locator(".product-miniature").count()
                   print(f"RESULT {lib} headless={headless} status={st} title={pg.title()[:50]!r} miniatures={n} {u}",flush=True)
@@ -40,8 +40,8 @@ jobs:
             with sync_playwright() as p:
               b=p.chromium.launch(headless=False); pg=b.new_page(locale="es-ES")
               r=pg.goto(u,timeout=45000)
-              for _ in range(20):
-                if "Just a moment" not in pg.title(): break
+              for _ in range(30):
+                if "moment" not in pg.title().lower(): break
                 time.sleep(1.5)
               print(f"RESULT patchright headful status={r.status if r else None} title={pg.title()[:50]!r} miniatures={pg.locator('.product-miniature').count()} {u}",flush=True)
               b.close()
