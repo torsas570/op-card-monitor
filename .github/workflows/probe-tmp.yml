@@ -1,0 +1,49 @@
+name: probe-tmp
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q playwright patchright && python -m patchright install --with-deps chromium >/dev/null 2>&1 && python -m playwright install chromium >/dev/null 2>&1
+      - shell: python
+        run: |
+          import time
+          URLS=["https://geekkaos.com/26-one-piece-tcg?resultsPerPage=200&order=product.date_add.desc",
+                "https://metropolis-center.com/es/catalogo/juegos-de-cartas/one-piece",
+                "https://metropolis-center.com/es/catalogo/juegos-de-cartas/pokemon"]
+          def run(lib, headless):
+            mod=__import__(lib+".sync_api",fromlist=["sync_playwright"])
+            with mod.sync_playwright() as p:
+              b=p.chromium.launch(headless=headless)
+              pg=b.new_page(locale="es-ES")
+              for u in URLS:
+                try:
+                  r=pg.goto(u,timeout=45000); st=r.status if r else None
+                  for _ in range(20):
+                    if "Just a moment" not in pg.title(): break
+                    time.sleep(1.5)
+                  n=pg.locator(".product-miniature").count()
+                  print(f"RESULT {lib} headless={headless} status={st} title={pg.title()[:50]!r} miniatures={n} {u}",flush=True)
+                except Exception as e: print(f"RESULT {lib} headless={headless} ERR {e!s:.100} {u}",flush=True)
+              b.close()
+          run("playwright",True)
+          run("patchright",True)
+      - run: sudo apt-get install -y -qq xvfb >/dev/null
+      - shell: bash
+        run: |
+          cat > h.py <<'PY'
+          import time
+          from patchright.sync_api import sync_playwright
+          for u in ["https://geekkaos.com/26-one-piece-tcg","https://metropolis-center.com/es/catalogo/juegos-de-cartas/one-piece"]:
+            with sync_playwright() as p:
+              b=p.chromium.launch(headless=False); pg=b.new_page(locale="es-ES")
+              r=pg.goto(u,timeout=45000)
+              for _ in range(20):
+                if "Just a moment" not in pg.title(): break
+                time.sleep(1.5)
+              print(f"RESULT patchright headful status={r.status if r else None} title={pg.title()[:50]!r} miniatures={pg.locator('.product-miniature').count()} {u}",flush=True)
+              b.close()
+          PY
+          xvfb-run -a python h.py
