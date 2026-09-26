@@ -376,6 +376,13 @@
       "include_keywords": [
         "one piece"
       ]
+    },
+    {
+      "_comment": "=== Manavortex (WooCommerce Store API, 200 desde Actions). Categoría 108 = one-piece-tcg (80 productos, cabe en per_page=100). Pinkork descartada: 403 desde Actions (Cloudflare). ===",
+      "name": "Manavortex (ES)",
+      "url": "https://manavortex.es/wp-json/wc/store/v1/products?per_page=100&category=108&orderby=date",
+      "type": "api",
+      "priority": "high"
     }
   ]
 }
