@@ -360,6 +360,32 @@
         "picking",
         "win a box"
       ]
+    },
+    {
+      "_comment": "=== Añadidas 26-sep-2026: Madrid Norte TCG (Shopify) y Geekkaos (PrestaShop, marca out_of_stock en la miniatura). Metrópolis Center descartada: Cloudflare pide reto JS en todo el catálogo. ===",
+      "name": "Madrid Norte TCG (One Piece)",
+      "url": "https://madridnortetcg.com/collections/one-piece-tcg/products.json?limit=250",
+      "type": "api",
+      "priority": "high"
+    },
+    {
+      "name": "Madrid Norte TCG (Preventas OP)",
+      "url": "https://madridnortetcg.com/collections/preventas-tcg/products.json?limit=250",
+      "type": "api",
+      "priority": "high",
+      "include_keywords": [
+        "one piece"
+      ]
+    },
+    {
+      "name": "Geekkaos (One Piece)",
+      "url": "https://geekkaos.com/26-one-piece-tcg?resultsPerPage=200&order=product.date_add.desc",
+      "type": "html",
+      "priority": "high",
+      "selector": "#js-product-list .product-miniature",
+      "title_selector": ".product-title a",
+      "link_selector": ".product-title a",
+      "price_selector": ".product-price"
     }
   ]
 }
