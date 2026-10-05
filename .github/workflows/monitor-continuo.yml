@@ -39,6 +39,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WATCHDOG_TOKEN: ${{ secrets.WATCHDOG_TOKEN }}
         run: |
           # Bucle acotado por TIEMPO (no por nº de pasadas): corre ~5h30m y sale
           # limpio para guardar estado y encadenar el siguiente bloque.
@@ -48,6 +49,8 @@ jobs:
             i=$((i+1))
             echo "== Pasada $i =="
             python3 monitor.py || echo "Pasada $i fallo, continuo con la siguiente"
+            # Cada ~15 min, comprobar que los bucles de los otros 3 bots siguen vivos.
+            [ $((i % 10)) -eq 1 ] && { ./watchdog.sh || true; }
             # Jitter 60-105s: cadencia ~1-2 min por tienda e IRREGULAR (menos "cara
             # de bot" que un intervalo fijo) -> menor riesgo de bloqueo de IP.
             sleep $((60 + RANDOM % 46))
