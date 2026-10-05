@@ -8,3 +8,4 @@ venv/
 .env
 config.local.json
 *.local.json
+.crash_notified
