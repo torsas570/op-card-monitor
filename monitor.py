@@ -71,8 +71,9 @@ PRIORITY_EMOJI = {"high": "🚨", "medium": "📦", "low": "🔍"}
 # Piece, donde se auditó contra el HTML real). "agotad" cubre agotado/agotada/
 # agotados; La Cueva Roja dice "Fuera de stock", no "out of stock".
 OOS_KEYWORDS = [
+    # Sin "vendido": la etiqueta "Más vendido" marcaba agotado un producto en stock.
     "agotad", "fuera de stock", "sin existencias", "sin stock",
-    "no disponible", "sold out", "out of stock", "vendido",
+    "no disponible", "sold out", "out of stock",
     "rupture de stock", "esgotado", "esaurito", "ausverkauft", "uitverkocht",
 ]
 # El marcador casi nunca está en la raíz de la miniatura: PrestaShop lo cuelga de
@@ -97,6 +98,7 @@ RUN_META_KEY = "__run__"   # clave reservada: última pasada completada (lo lee 
 # distinguen de las tiendas sin tener que enumerarlas.
 CRASH_FLAG = BASE_DIR / ".crash_notified"  # evita repetir el aviso de caída en cada pasada
 DEFAULT_RECOVER_PASSES = 3  # pasadas buenas SEGUIDAS para dar por recuperada una tienda
+DEFAULT_ANOMALY_ACCEPT = 3  # pasadas seguidas con la misma desaparición masiva para aceptarla
 DEFAULT_HEALTH_FAIL_THRESHOLD = 10  # fallos seguidos antes de avisar (~10 min a 1 pasada/min)
 DEFAULT_EMPTY_THRESHOLD = 5        # pasadas a 0 productos (habiendo tenido catálogo) antes de avisar
 DEFAULT_DIGEST_COOLDOWN_MIN = 30   # minutos mínimos entre dos resúmenes de salud
@@ -230,7 +232,9 @@ def _collect_health_alerts(state, config):
     # Una tienda CIEGA es pérdida de datos silenciosa y es rara: se salta la espera.
     # Las caídas y recuperaciones son ruido de mantenimiento y sí la respetan.
     ahora = time.time()
-    if not ciegas and ahora - meta.get("last_digest", 0) < cooldown:
+    # `or 0`: si falla el envío del PRIMER resumen, deshacer deja last_digest=None
+    # y `ahora - None` reventaba la pasada siguiente (y todas las demás).
+    if not ciegas and ahora - (meta.get("last_digest") or 0) < cooldown:
         deshacer()
         return [], (lambda: None)
 
@@ -794,6 +798,10 @@ def process_site(site_cfg, products, state, config):
     truncado = cap is not None and len(products) >= cap
 
     n_antes = len(products)
+    # uids de TODO lo que devuelve la tienda, antes de filtrar: para distinguir un
+    # producto que ha DESAPARECIDO del listado de uno que sigue ahí pero el filtro
+    # deja fuera.
+    uids_crudos = {p["uid"] for p in products} | {p.get("legacy_uid") for p in products}
     if required_keywords or required_patterns:
         def requerido(t):
             return matches_keywords(t, required_keywords) or \
@@ -828,6 +836,13 @@ def process_site(site_cfg, products, state, config):
     # state en el sitio aunque luego el envío a Telegram fallara, y el aviso se
     # perdería igualmente (que es justo lo que esto viene a evitar).
     site_state = dict(normalize_state(raw_prev))
+    # Lo que la tienda sigue listando pero el filtro ya no deja pasar (p. ej. merch
+    # tras añadir exclusiones) sale del state. Si se quedaba, en las tiendas con
+    # `mark_disappeared_oos` contaba como "desaparecido" en cada pasada: Friki
+    # Galaxy y AllInTCG daban "listado anómalo" siempre y la detección no servía.
+    uids_filtrados = {p["uid"] for p in products} | {p.get("legacy_uid") for p in products}
+    for uid in [u for u in site_state if u in uids_crudos and u not in uids_filtrados]:
+        del site_state[uid]
     if not products:
         return [], site_state, 0
 
@@ -882,14 +897,27 @@ def process_site(site_cfg, products, state, config):
     # (`mark_disappeared_oos`). No se aplica con el listado al tope (rotarían
     # productos y darían falsos restocks) ni si desaparece media tienda de golpe.
     if config.get("mark_disappeared_oos", False) and not is_first_run and not truncado:
-        vistos = {p["uid"] for p in products} | {p.get("legacy_uid") for p in products}
         desaparecidos = [uid for uid, prev in site_state.items()
-                         if uid not in vistos and prev.get("in_stock", True)]
+                         if uid not in uids_crudos and prev.get("in_stock", True)]
         limite = max(5, len(products) // 2)
+        # Una desaparición masiva puede ser un listado roto puntual (no se marca)
+        # o la tienda que ha despublicado lo agotado de verdad (AllInTCG pasó de 12
+        # cajas a 1 y se quedó así). Si se repite varias pasadas seguidas, se acepta:
+        # antes daba "listado anómalo" para siempre y esas cajas nunca avisaban al volver.
+        h = state.setdefault(HEALTH_KEY, {}).setdefault(name, {})
         if len(desaparecidos) > limite:
-            log.warning(f"  {name}: {len(desaparecidos)} productos desaparecidos de golpe "
-                        f"(> {limite}), listado anómalo: no se marcan")
-        elif desaparecidos:
+            h["anomalo_streak"] = h.get("anomalo_streak", 0) + 1
+            if h["anomalo_streak"] < config.get("anomaly_accept_passes", DEFAULT_ANOMALY_ACCEPT):
+                log.warning(f"  {name}: {len(desaparecidos)} productos desaparecidos de golpe "
+                            f"(> {limite}), listado anómalo: no se marcan "
+                            f"({h['anomalo_streak']}ª pasada seguida)")
+                desaparecidos = []
+            else:
+                log.warning(f"  {name}: {len(desaparecidos)} desaparecidos {h['anomalo_streak']} "
+                            f"pasadas seguidas: se aceptan (la tienda ha retirado esos productos)")
+        else:
+            h["anomalo_streak"] = 0
+        if desaparecidos:
             for uid in desaparecidos:
                 site_state[uid] = {"in_stock": False, "gone": True}
             log.info(f"  {name}: {len(desaparecidos)} desaparecidos del listado, "
@@ -1121,6 +1149,10 @@ def run_once(priority_filter=None):
             else:
                 log.error(f"{name}: aviso NO enviado -> no se marca como visto, "
                           f"se reintenta en la próxima pasada")
+
+    # Guardar YA lo avisado: si algo de lo que viene después fallara, la pasada
+    # siguiente no repetiría los mismos avisos.
+    save_state(state)
 
     # --- 4) Re-sincronizaciones: ruido de mantenimiento, una línea y en silencio ---
     if resyncs:
