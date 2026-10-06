@@ -20,6 +20,7 @@ GLOBAL_KEYS = {
     "sound_only_for_priority", "sound_for_promo", "avalanche_store_threshold", "max_alerts_avalanche",
     "max_alerts_per_site", "notify_only_in_stock", "notify_new_oos_priority", "silent_first_run",
     "mark_disappeared_oos", "resync_threshold", "cart_buttons", "max_cart_buttons",
+    "edit_on_sold_out", "timezone",
     "required_keywords", "required_any_keywords", "required_patterns", "exclude_keywords",
     "top_priority_keywords", "high_value_keywords", "promo_keywords", "priority_exclude",
 }

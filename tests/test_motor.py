@@ -23,8 +23,12 @@ class Harness:
         m.load_state=lambda: s.state
         m.save_state=lambda st: setattr(s,"state",json.loads(json.dumps(st)))
         m.fetch_site=lambda site,cfg,timeout=None,attempts=2: fetch(site)
+        s.edits=[]; s._mid=[100]
         def fake_send(tok,chat,msg,*a,**k):
-            s.sent.append(msg); return s.ok_send
+            s.sent.append(msg)
+            if not s.ok_send: return False
+            s._mid[0]+=1; return s._mid[0]
+        m.edit_telegram=lambda tok,chat,mid,text,markup:(s.edits.append((mid,text,markup)),True)[1]
         m.send_telegram=fake_send
         s.ok_send=True
     def run(s,**k):
@@ -243,5 +247,18 @@ _,pr,err=f.fetch_site({"name":"F","url":"https://f.es/wp-json/wc/store/v1/produc
 api=[x for x in pedidas if "wp-json" in x[0]][0]
 check(pr and api[1].get("Cookie")=="dhd2=abc123", "cookie del reto JS enviada")
 check("_fields=" in api[0] and "_cb=" in api[0], "Woo con _fields y _cb")
+# --- editar el aviso cuando se agota ---
+ocfg["sites"]=[{"name":"ED","url":"https://ed.com/c/products.json?limit=250","type":"api"}]
+ecat=[P(1,"OP Booster Box OP-15")]
+he=Harness(o,ocfg,lambda s:(s,list(ecat),None)); he.run()
+nuevo=P(2,"OP Booster Box OP-16"); nuevo["cart_url"]="https://ed.com/cart/22:1"
+ecat.append(nuevo); msgs=he.run()
+check(len(msgs)==1 and "OP-16" in str(he.state.get("__live__")), "producto avisado en stock queda registrado")
+ecat[1]=dict(nuevo, in_stock=False); he.run()
+check(len(he.edits)==1 and "❌" in he.edits[0][1] and "<s><b>OP Booster Box OP-16</b></s>" in he.edits[0][1], f"aviso editado como agotado: {he.edits}")
+check(he.edits and he.edits[0][2]["inline_keyboard"]==[], "botón de cesta retirado")
+check(not he.state.get("__live__"), "registro limpiado tras editar")
+he.run(); check(len(he.edits)==1, "no se edita dos veces")
+check(o._duracion(240)=="4 min" and o._duracion(3*3600+600)=="3 h 10 min", "formato de duración")
 print(f"\n{ok} OK, {fail} FAIL")
 sys.exit(1 if fail else 0)

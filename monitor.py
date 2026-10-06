@@ -96,6 +96,9 @@ HEALTH_KEY = "__health__"  # clave reservada en state para la salud de las tiend
 HEALTH_META_KEY = "__health_meta__"  # clave reservada: control del resumen de salud
 SIG_KEY = "__sig__"        # clave reservada: firma de URL+filtros con la que se vio cada tienda
 RUN_META_KEY = "__run__"   # clave reservada: última pasada completada (lo lee el heartbeat)
+LIVE_KEY = "__live__"      # clave reservada: producto avisado EN STOCK -> mensaje donde se avisó
+MSGS_KEY = "__msgs__"      # clave reservada: texto y botones de esos mensajes, para editarlos
+LIVE_MAX_DIAS = 7          # pasado esto ya no se edita el aviso (y se olvida)
 # Todas las claves reservadas empiezan por "__": así heartbeat y poda las
 # distinguen de las tiendas sin tener que enumerarlas.
 CRASH_FLAG = BASE_DIR / ".crash_notified"  # evita repetir el aviso de caída en cada pasada
@@ -543,7 +546,12 @@ def send_telegram(bot_token, chat_id, message, attempts=4, silent=False, reply_m
             continue
         if resp.status_code == 200:
             log.info("Notificación Telegram enviada")
-            return True
+            # El id del mensaje permite editarlo después (agotado). Sigue siendo
+            # "verdadero" para quien solo comprueba si salió.
+            try:
+                return resp.json()["result"]["message_id"]
+            except Exception:
+                return True
         if resp.status_code == 429:
             try:
                 wait = int(resp.json().get("parameters", {}).get("retry_after", 5))
@@ -570,14 +578,37 @@ def send_telegram(bot_token, chat_id, message, attempts=4, silent=False, reply_m
 
 
 def send_telegram_chunks(bot_token, chat_id, messages, silent=False, reply_markup=None):
-    """Envía una lista de trozos. True solo si TODOS salen. Los botones van en el
-    último trozo, que es el que queda abajo del todo en el chat."""
-    ok = True
+    """Envía una lista de trozos. Devuelve la lista de ids de mensaje si TODOS
+    salen, o False. Los botones van en el último trozo, que es el que queda abajo
+    del todo en el chat."""
+    ids = []
     for i, msg in enumerate(messages):
         markup = reply_markup if i == len(messages) - 1 else None
-        if not send_telegram(bot_token, chat_id, msg, silent=silent, reply_markup=markup):
-            ok = False
-    return ok
+        mid = send_telegram(bot_token, chat_id, msg, silent=silent, reply_markup=markup)
+        if not mid:
+            return False
+        ids.append(mid)
+    return ids
+
+
+def edit_telegram(bot_token, chat_id, message_id, text, reply_markup):
+    """Edita un aviso ya enviado. Devuelve True si quedó editado (o ya lo estaba),
+    False si hay que reintentar y None si el mensaje ya no existe (borrado)."""
+    url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text,
+               "parse_mode": "HTML", "disable_web_page_preview": False,
+               "reply_markup": reply_markup or {"inline_keyboard": []}}
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+    except Exception as e:
+        log.warning(f"Telegram (editar), error de red: {e}")
+        return False
+    if resp.status_code == 200 or "not modified" in resp.text:
+        return True
+    if "not found" in resp.text or "can't be edited" in resp.text:
+        return None
+    log.warning(f"Telegram (editar) {resp.status_code}: {resp.text[:200]}")
+    return False
 
 
 def cart_keyboard(entradas, config):
@@ -1190,6 +1221,16 @@ def run_once(priority_filter=None):
             resyncs.append((name, n_resync))
 
     def commit(name, site_state):
+        # Lo que estaba EN STOCK y ahora no (o ha desaparecido del listado): si se
+        # avisó en su día, ese aviso se editará como agotado.
+        viejo = state.get(name)
+        live = state.get(LIVE_KEY, {})
+        if isinstance(viejo, dict) and live:
+            for uid, v in site_state.items():
+                rec = live.get(f"{dominios[name]}|{uid}")
+                if rec and "agotado" not in rec and not v.get("in_stock", True) \
+                        and viejo.get(uid, {}).get("in_stock", False):
+                    rec["agotado"] = time.time()
         # El state de la tienda y la firma con la que se vio van SIEMPRE juntos: si
         # el aviso no sale, ninguno de los dos se actualiza y se reintenta entero.
         state[name] = site_state
@@ -1229,7 +1270,10 @@ def run_once(priority_filter=None):
         msgs = format_avalanche(con_alertas, config)
         silent = solo_prioritarios and not is_loud(todas, config)
         botones = cart_keyboard([(a, name) for name, _, alerts, _ in con_alertas for a in alerts], config)
-        if send_telegram_chunks(bot_token, chat_id, msgs, silent=silent, reply_markup=botones):
+        ids = send_telegram_chunks(bot_token, chat_id, msgs, silent=silent, reply_markup=botones)
+        if ids:
+            register_live(state, msgs, ids, botones,
+                          [(a, dominios[name]) for name, _, alerts, _ in con_alertas for a in alerts])
             for name, _, alerts, new_site_state in con_alertas:
                 commit(name, new_site_state)
                 n_alertas += len(alerts)
@@ -1241,7 +1285,9 @@ def run_once(priority_filter=None):
             msgs = format_notification(name, priority, alerts, config)
             silent = solo_prioritarios and not is_loud(alerts, config)
             botones = cart_keyboard([(a, None) for a in alerts], config)
-            if send_telegram_chunks(bot_token, chat_id, msgs, silent=silent, reply_markup=botones):
+            ids = send_telegram_chunks(bot_token, chat_id, msgs, silent=silent, reply_markup=botones)
+            if ids:
+                register_live(state, msgs, ids, botones, [(a, dominios[name]) for a in alerts])
                 commit(name, new_site_state)
                 n_alertas += len(alerts)
             else:
@@ -1251,6 +1297,10 @@ def run_once(priority_filter=None):
     # Guardar YA lo avisado: si algo de lo que viene después fallara, la pasada
     # siguiente no repetiría los mismos avisos.
     save_state(state)
+
+    # --- 3b) Avisos de lo que se ha agotado: se editan (opcional, por defecto sí) ---
+    if config.get("edit_on_sold_out", True):
+        edit_sold_out(state, bot_token, chat_id, config)
 
     # --- 4) Re-sincronizaciones: ruido de mantenimiento, una línea y en silencio ---
     if resyncs:
@@ -1277,6 +1327,84 @@ def run_once(priority_filter=None):
     ping_healthcheck()
     if not n_alertas:
         log.info("Sin alertas en esta revisión")
+
+
+def _duracion(seg):
+    seg = max(0, int(seg))
+    if seg < 3600:
+        return f"{max(1, seg // 60)} min"
+    if seg < 48 * 3600:
+        h, m = divmod(seg // 60, 60)
+        return f"{h} h {m} min" if m else f"{h} h"
+    return f"{seg // 86400} días"
+
+
+def _hora_local(ts, config):
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(config.get("timezone", "Europe/Madrid"))
+    except Exception:
+        tz = None
+    from datetime import datetime
+    return datetime.fromtimestamp(ts, tz).strftime("%H:%M")
+
+
+def register_live(state, msgs, ids, markup, entradas):
+    """Apunta en qué mensaje se avisó de cada producto EN STOCK, para poder
+    editarlo cuando se agote. `entradas` = [(alerta, dominio)]."""
+    if not ids:
+        return
+    ahora = time.time()
+    store = state.setdefault(MSGS_KEY, {})
+    live = state.setdefault(LIVE_KEY, {})
+    pares = [(t, i) for t, i in zip(msgs, ids) if not isinstance(i, bool)]
+    for n, (texto, mid) in enumerate(pares):
+        store[str(mid)] = {"text": texto, "ts": ahora,
+                           "markup": markup if n == len(pares) - 1 else None}
+    for a, dominio in entradas:
+        if not a.get("in_stock"):
+            continue
+        marca = f"<b>{html_mod.escape(a['title'])}</b>"
+        mid = next((i for t, i in pares if marca in t), None)
+        if mid is not None:
+            live[f"{dominio}|{a['uid']}"] = {"msg": mid, "ts": ahora, "marca": marca,
+                                             "cart": a.get("cart_url", "")}
+
+
+def edit_sold_out(state, bot_token, chat_id, config):
+    """Edita los avisos de lo que se ha agotado: "❌ agotado 10:42 · duró 4 min" y
+    quita su botón 🛒. Con el tiempo enseña qué tiendas vuelan. Si la edición
+    falla se reintenta en la pasada siguiente (como mucho durante un día)."""
+    live = state.get(LIVE_KEY, {})
+    store = state.get(MSGS_KEY, {})
+    ahora = time.time()
+    for key, rec in list(live.items()):
+        if "agotado" not in rec:
+            if ahora - rec.get("ts", 0) > LIVE_MAX_DIAS * 86400:
+                live.pop(key)
+            continue
+        m = store.get(str(rec["msg"]))
+        if not m or ahora - rec["agotado"] > 86400:
+            live.pop(key)
+            continue
+        nota = (f"<s>{rec['marca']}</s> ❌ <b>agotado {_hora_local(rec['agotado'], config)}</b>"
+                f" · duró {_duracion(rec['agotado'] - rec['ts'])}")
+        texto = m["text"].replace(rec["marca"], nota, 1)
+        markup = m.get("markup")
+        if markup and rec.get("cart"):
+            markup = {"inline_keyboard": [f for f in markup.get("inline_keyboard", [])
+                                          if not any(b.get("url") == rec["cart"] for b in f)]}
+        r = edit_telegram(bot_token, chat_id, rec["msg"], texto, markup)
+        if r is False:
+            continue
+        live.pop(key)
+        if r:
+            m["text"], m["markup"] = texto, markup
+            log.info(f"Aviso editado: agotado tras {_duracion(rec['agotado'] - rec['ts'])} ({key})")
+    # Mensajes que ya no tienen ningún producto pendiente de editar
+    vivos = {str(r["msg"]) for r in live.values()}
+    for mid in [k for k, v in store.items() if k not in vivos and ahora - v.get("ts", 0) > 3600]:
+        store.pop(mid)
 
 
 def prune_state(state, config):
