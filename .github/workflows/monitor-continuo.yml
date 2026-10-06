@@ -40,6 +40,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WATCHDOG_TOKEN: ${{ secrets.WATCHDOG_TOKEN }}
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}   # ping externo (healthchecks.io); sin él no hace nada
         run: |
           # Bucle acotado por TIEMPO (no por nº de pasadas): corre ~5h30m y sale
           # limpio para guardar estado y encadenar el siguiente bloque.
