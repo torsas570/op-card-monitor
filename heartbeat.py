@@ -76,13 +76,13 @@ if viejas:
 
 # Prueba de vida REAL: monitor.py apunta en "__run__" cuándo completó su última
 # pasada. Antes este mensaje decía "bot vivo" siempre, aunque monitor.py petara en
-# cada pasada. El state llega por la caché, que el bucle guarda al acabar cada
-# bloque de ~5h30m, así que lo normal es que tenga hasta ~6 h; más de 7 h = parado.
+# cada pasada. El state llega por la caché, que el bucle guarda tras cada tramo
+# de 66 min, así que lo normal es que tenga hasta ~1 h; más de 2 h = parado.
 _run = state.get("__run__", {})
 _edad_h = (time.time() - _run["last_run"]) / 3600 if _run.get("last_run") else None
 if _edad_h is None:
     vida = "ℹ️ Sin pasadas registradas todavía (versión nueva recién desplegada)"
-elif _edad_h > 7:
+elif _edad_h > 2:
     vida = (f"🛑 <b>La última pasada guardada es de hace {_edad_h:.0f} h</b>: "
             f"el bucle puede estar parado. Revisa GitHub Actions.")
 else:

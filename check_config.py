@@ -20,7 +20,8 @@ GLOBAL_KEYS = {
     "sound_only_for_priority", "sound_for_promo", "avalanche_store_threshold", "max_alerts_avalanche",
     "max_alerts_per_site", "notify_only_in_stock", "notify_new_oos_priority", "silent_first_run",
     "mark_disappeared_oos", "resync_threshold", "cart_buttons", "max_cart_buttons",
-    "edit_on_sold_out", "timezone",
+    "edit_on_sold_out", "timezone", "official_sources", "official_check_minutes", "official_loud",
+    "set_code_pattern",
     "required_keywords", "required_any_keywords", "required_patterns", "exclude_keywords",
     "top_priority_keywords", "high_value_keywords", "promo_keywords", "priority_exclude",
 }
@@ -41,6 +42,16 @@ def revisar(cfg):
             re.compile(p)
         except re.error as e:
             errores.append(f"required_patterns[{i}] no es una regex válida: {e}")
+    for p in [cfg.get("set_code_pattern")] if cfg.get("set_code_pattern") else []:
+        try:
+            if re.compile(p).groups != 2:
+                errores.append("set_code_pattern necesita 2 grupos: prefijo y número")
+        except re.error as e:
+            errores.append(f"set_code_pattern no es una regex válida: {e}")
+    for f in cfg.get("official_sources", []):
+        falta = [k for k in ("name", "url", "selector") if not f.get(k)]
+        if falta:
+            errores.append(f"fuente oficial {f.get('name', '?')!r}: falta {', '.join(falta)}")
     sites = cfg.get("sites")
     if not isinstance(sites, list) or not sites:
         return errores + ["'sites' falta o está vacío"]

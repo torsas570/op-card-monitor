@@ -99,6 +99,7 @@ RUN_META_KEY = "__run__"   # clave reservada: última pasada completada (lo lee 
 LIVE_KEY = "__live__"      # clave reservada: producto avisado EN STOCK -> mensaje donde se avisó
 MSGS_KEY = "__msgs__"      # clave reservada: texto y botones de esos mensajes, para editarlos
 LIVE_MAX_DIAS = 7          # pasado esto ya no se edita el aviso (y se olvida)
+OFFICIAL_KEY = "__official__"  # clave reservada: páginas oficiales vistas y códigos de set recientes
 # Todas las claves reservadas empiezan por "__": así heartbeat y poda las
 # distinguen de las tiendas sin tener que enumerarlas.
 CRASH_FLAG = BASE_DIR / ".crash_notified"  # evita repetir el aviso de caída en cada pasada
@@ -637,7 +638,7 @@ def cart_keyboard(entradas, config):
 def is_priority(p, config=None):
     """¿Es de los que importan? 🔥 y 🚨 siempre; 🎁 solo si el bot lo pide con
     `sound_for_promo` (One Piece: los promos de revista/torneo son caza mayor)."""
-    if p.get("top_priority") or p.get("high_value"):
+    if p.get("top_priority") or p.get("high_value") or p.get("fresh_set"):
         return True
     return bool(p.get("promo") and (config or {}).get("sound_for_promo", False))
 
@@ -674,7 +675,7 @@ def product_rank(p):
     """
     if p.get("top_priority"):
         return 0
-    if p.get("high_value"):
+    if p.get("high_value") or p.get("fresh_set"):
         return 1
     if p.get("promo"):
         return 2
@@ -686,6 +687,8 @@ def rank_mark(p):
         return "🔥"
     if p.get("high_value"):
         return "🚨"
+    if p.get("fresh_set"):
+        return "📅"
     if p.get("promo"):
         return "🎁"
     return ""
@@ -866,11 +869,16 @@ def mark_priority(p, config):
     sellado: fundas "Display 12 unidades", "Card Case", sleeves "Tournament"...
     Así siguen llegando, pero en silencio."""
     if matches_keywords(p["title"], config.get("priority_exclude", [])):
-        p["top_priority"] = p["high_value"] = p["promo"] = False
+        p["top_priority"] = p["high_value"] = p["promo"] = p["fresh_set"] = False
         return p
     p["top_priority"] = matches_keywords(p["title"], config.get("top_priority_keywords", []))
     p["high_value"] = matches_keywords(p["title"], config.get("high_value_keywords", []))
     p["promo"] = matches_keywords(p["title"], config.get("promo_keywords", []))
+    # 📅 Código de un set anunciado hace poco en la web oficial: las primeras
+    # preventas suelen titularse vago ("One Piece OP-19 [EN] Preventa", sin decir
+    # caja ni box) y sin esto llegaban en silencio.
+    frescos = config.get("_fresh_codes")
+    p["fresh_set"] = bool(frescos and set_codes(p["title"], config.get("set_code_pattern")) & frescos)
     return p
 
 
@@ -1167,6 +1175,7 @@ def run_once(priority_filter=None):
         sys.exit(1)
 
     prune_state(state, config)
+    check_official(state, config, bot_token, chat_id)
 
     sites = config["sites"]
     if priority_filter:
@@ -1407,6 +1416,114 @@ def edit_sold_out(state, bot_token, chat_id, config):
         store.pop(mid)
 
 
+def set_codes(title, pattern):
+    """Códigos de set del título, normalizados: "OP19", "op-19" y "[OP-19]" -> "OP-19".
+    El patrón (config `set_code_pattern`) tiene dos grupos: prefijo y número."""
+    if not pattern or not title:
+        return set()
+    return {f"{m.group(1).upper()}-{m.group(2)}" for m in re.finditer(pattern, title.upper())}
+
+
+_MESES = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+
+
+def _fecha_oficial(texto):
+    """'November 20, 2026' / 'Nov. 20, 2026' / 'August 2026' -> timestamp, o None."""
+    from datetime import datetime
+    m = re.search(r"\b([A-Za-z]{3})[a-z]*\.?\s+(?:(\d{1,2}),\s*)?(\d{4})\b", texto or "")
+    if not m or m.group(1).lower() not in _MESES:
+        return None
+    try:
+        return datetime(int(m.group(3)), _MESES[m.group(1).lower()], int(m.group(2) or 1)).timestamp()
+    except ValueError:
+        return None
+
+
+def extract_official(html, src):
+    """Lista de una web oficial: título, enlace y un texto con la fecha/precio."""
+    soup = BeautifulSoup(html, "html.parser")
+    items = []
+    for it in soup.select(src["selector"]):
+        t_el = it if src.get("title_selector", ".") == "." else it.select_one(src["title_selector"])
+        a_el = it if it.name == "a" else it.select_one(src.get("link_selector", "a"))
+        if not t_el or not a_el or not a_el.get("href"):
+            continue
+        titulo = " ".join(t_el.get_text(" ", strip=True).split())
+        info = ""
+        if src.get("info_selector"):
+            info = " ".join(" ".join(e.get_text(" ", strip=True).split()) for e in it.select(src["info_selector"]))
+        elif src.get("info_next"):
+            tag, _, cls = src["info_next"].partition(".")
+            sig = it.find_next(tag or True, class_=cls or None)
+            info = " ".join(sig.get_text(" ", strip=True).split()) if sig else ""
+        items.append({"title": titulo, "link": urljoin(src["url"], a_el["href"]), "info": info})
+    return items
+
+
+def check_official(state, config, bot_token, chat_id):
+    """Webs oficiales (Bandai, Pokémon): avisan de un producto semanas antes de que
+    las tiendas abran preventa. Cada `official_check_minutes` (30) se mira la
+    lista; lo nuevo se avisa ("📰 novedad oficial") y sus códigos de set pasan a
+    ser prioritarios (📅) durante 60 días, o hasta 30 días después de su salida.
+    La primera vez se toma la lista como base sin avisar."""
+    fuentes = config.get("official_sources", [])
+    off = state.setdefault(OFFICIAL_KEY, {})
+    seen_all = off.setdefault("seen", {})
+    codes = off.setdefault("codes", {})
+    ahora = time.time()
+    if fuentes and ahora - off.get("last_check", 0) >= config.get("official_check_minutes", 30) * 60:
+        off["last_check"] = ahora
+        pat = config.get("set_code_pattern")
+        for src in fuentes:
+            try:
+                r = requests.get(src["url"], headers=build_headers(config["user_agent"]),
+                                 timeout=config.get("request_timeout_seconds", DEFAULT_TIMEOUT))
+                r.raise_for_status()
+                items = extract_official(r.text, src)
+            except Exception as e:
+                log.warning(f"  [oficial] {src['name']} no disponible: {e}")
+                _record_health(state, src["name"], ok=False, error=str(e))
+                continue
+            _record_health(state, src["name"], ok=True, n_products=len(items))
+            if src.get("apply_filters"):
+                # Webs con de todo (videojuegos, merch...): solo lo que pasa el filtro del bot
+                items = [i for i in items if matches_keywords(i["title"], config.get("required_keywords", []))
+                         or matches_patterns(i["title"], config.get("required_patterns", []))]
+            primera = src["name"] not in seen_all
+            vistos = set(seen_all.get(src["name"], []))
+            nuevos = [i for i in items if i["link"] not in vistos]
+            for i in items:
+                fecha = _fecha_oficial(i["info"])
+                reciente = i in nuevos and not primera
+                if not (reciente or (fecha and fecha >= ahora - 30 * 86400)):
+                    continue
+                hasta = max(ahora + 60 * 86400, (fecha or 0) + 30 * 86400)
+                for c in set_codes(i["title"], pat):
+                    codes[c] = max(codes.get(c, 0), hasta)
+            log.info(f"  [oficial] {src['name']}: {len(items)} productos"
+                     + (f", {len(nuevos)} nuevos" if nuevos and not primera else "")
+                     + (" (base inicial)" if primera else ""))
+            if nuevos and not primera:
+                lineas = [f"📰 <b>{html_mod.escape(config.get('bot_label', 'MONITOR'))} — novedad oficial</b>"
+                          f" <i>({html_mod.escape(src['name'])})</i>\n"]
+                for i in nuevos[:10]:
+                    lineas.append(f"• <b>{html_mod.escape(i['title'])}</b>")
+                    if i["info"]:
+                        lineas.append(f"  📅 {html_mod.escape(i['info'][:120])}")
+                    lineas.append(f"  🔗 {i['link']}\n")
+                cods = sorted(set().union(*(set_codes(i["title"], pat) for i in nuevos)))
+                if cods:
+                    lineas.append(f"Los listados de tiendas con <b>{', '.join(cods)}</b> se marcan 📅 y suenan.")
+                if not send_telegram(bot_token, chat_id, "\n".join(lineas),
+                                     silent=not config.get("official_loud", True)):
+                    continue  # no se marcan como vistos: se reintenta
+            seen_all[src["name"]] = sorted(vistos | {i["link"] for i in items})[-1000:]
+    for c in [c for c, hasta in codes.items() if hasta < ahora]:
+        codes.pop(c)
+    config["_fresh_codes"] = set(codes)
+
+
 def prune_state(state, config):
     """Borra del state las tiendas que ya no están en config.json.
 
@@ -1417,6 +1534,7 @@ def prune_state(state, config):
     """
     nombres = {s["name"] for s in config["sites"]}
     huerfanas = [k for k in state if not k.startswith("__") and k not in nombres]
+    nombres |= {f["name"] for f in config.get("official_sources", [])}
     for k in huerfanas:
         del state[k]
     for key in (HEALTH_KEY, SIG_KEY):

@@ -260,5 +260,21 @@ check(he.edits and he.edits[0][2]["inline_keyboard"]==[], "botón de cesta retir
 check(not he.state.get("__live__"), "registro limpiado tras editar")
 he.run(); check(len(he.edits)==1, "no se edita dos veces")
 check(o._duracion(240)=="4 min" and o._duracion(3*3600+600)=="3 h 10 min", "formato de duración")
+# --- webs oficiales: aviso de novedad y códigos 📅 ---
+of=load("oficial")
+pagina={"html":'<ul><li class="x"><a class="l" href="/p/op18.html"><h4 class="t">BOOSTER PACK [OP-18]</h4><time>November 20, 2099</time></a></li></ul>'}
+of.requests.get=lambda url,headers=None,timeout=None: Resp(pagina["html"],ct="text/html")
+env=[]; of.send_telegram=lambda t,c,msg,*a,**k:(env.append(msg),5)[1]
+fcfg={"user_agent":"UA","bot_label":"OP","set_code_pattern":r"\b(OP|EB|PRB)-?(\d{2})\b",
+      "official_sources":[{"name":"Oficial","url":"https://o.com/products/","selector":"li.x","title_selector":"h4.t","link_selector":"a.l","info_selector":"time"}]}
+fst={}; of.check_official(fst,fcfg,"x","y")
+check(env==[] and fcfg["_fresh_codes"]=={"OP-18"}, f"base oficial en silencio y OP-18 (sale en el futuro) prioritario: {fcfg.get('_fresh_codes')}")
+pagina["html"]+='<ul><li class="x"><a class="l" href="/p/eb06.html"><h4 class="t">EXTRA BOOSTER [EB-06]</h4></a></li></ul>'
+fst["__official__"]["last_check"]=0; of.check_official(fst,fcfg,"x","y")
+check(len(env)==1 and "EB-06" in env[0] and "novedad oficial" in env[0], "producto oficial nuevo avisado")
+check(fcfg["_fresh_codes"]=={"OP-18","EB-06"}, "su código pasa a prioritario")
+q={"title":"One Piece EB06 [EN] Preventa"}; of.mark_priority(q,fcfg)
+check(q["fresh_set"] and of.rank_mark(q)=="📅" and of.is_priority(q,fcfg), "listado vago con código fresco = 📅 prioritario")
+check(of._fecha_oficial("Release Nov. 20, 2026") and of._fecha_oficial("sin fecha") is None, "fechas oficiales")
 print(f"\n{ok} OK, {fail} FAIL")
 sys.exit(1 if fail else 0)

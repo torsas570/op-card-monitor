@@ -80,6 +80,18 @@
     "anniversary",
     "aniversario"
   ],
+  "_comment_official": "Webs oficiales: lo nuevo se avisa con '📰 novedad oficial' semanas antes de las preventas, y sus códigos de set (set_code_pattern) pasan 60 días a prioridad 📅: un listado de tienda con ese código suena aunque su título no diga caja/box.",
+  "official_sources": [
+    {
+      "name": "Web oficial One Piece CG (productos)",
+      "url": "https://en.onepiece-cardgame.com/products/",
+      "selector": "li.linkListColBox",
+      "title_selector": "h4.linkListColTitle",
+      "link_selector": "a.linkListColItem",
+      "info_selector": "time, .linkListColPrice"
+    }
+  ],
+  "set_code_pattern": "\\b(OP|EB|PRB)-?(\\d{2})\\b",
   "sites": [
     {
       "_comment": "Antes HTML de la categoría: solo leía la página 1 (12 de 15) y el precio salía con el texto de oferta pegado. La Store API de la misma categoría (id 20) trae todo. Renombrada para que la 1ª pasada sea baseline silencioso (el uid cambia de enlace a woo:id).",
@@ -802,6 +814,42 @@
     {
       "name": "Samurai Sword Tokyo (One Piece, JP)",
       "url": "https://samuraiswordtokyo.com/wp-json/wc/store/v1/products?per_page=100&orderby=date&order=desc&category=170",
+      "type": "api",
+      "priority": "medium"
+    },
+    {
+      "_comment": "=== Secundarias añadidas 06/10/2026, verificadas desde Actions (CardCenter da 403 desde Actions y Chaos Cards también desde casa: fuera). ===",
+      "name": "Industria61 (One Piece)",
+      "url": "https://industria61.com/wp-json/wc/store/v1/products?per_page=100&orderby=date&order=desc&category=83",
+      "type": "api",
+      "priority": "medium",
+      "exclude_keywords": [
+        "ultimate guard",
+        "dragon shield",
+        "figura",
+        "funko",
+        "peluche",
+        "camiseta"
+      ]
+    },
+    {
+      "name": "ZIAL TCG (One Piece)",
+      "url": "https://zialtcg.com/wp-json/wc/store/v1/products?per_page=100&orderby=date&order=desc&category=141",
+      "type": "api",
+      "priority": "high"
+    },
+    {
+      "name": "ZIAL TCG (Preventa)",
+      "url": "https://zialtcg.com/wp-json/wc/store/v1/products?per_page=100&orderby=date&order=desc&category=199",
+      "type": "api",
+      "priority": "high",
+      "include_keywords": [
+        "one piece"
+      ]
+    },
+    {
+      "name": "Saruman Games (One Piece)",
+      "url": "https://sarumangames.es/collections/one-piece-juego-de-cartas-coleccionables/products.json?limit=250",
       "type": "api",
       "priority": "medium"
     }
