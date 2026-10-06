@@ -676,6 +676,14 @@ def fetch_site(site_cfg, config, timeout=None, attempts=2):
     if is_api:
         p = urlparse(url)
         headers["Referer"] = f"{p.scheme}://{p.netloc}/"
+    if "/wp-json/" in url:
+        # Varias WooCommerce (Topdeck, Manavortex, Micelion, Esfantasia, TCG
+        # Portugal) sirven la Store API desde la caché de LiteSpeed: medido en
+        # Topdeck con 1,5 h de antigüedad (`age: 5405`). Un producto nuevo podía
+        # tardar eso en verse. Un parámetro que cambia en cada pasada fuerza
+        # respuesta fresca (`x-litespeed-cache: miss`); la API lo ignora. Solo se
+        # toca la petición: la firma y el tope (`per_page`) salen de la URL del config.
+        url = f"{url}{'&' if '?' in url else '?'}_cb={int(time.time())}"
 
     last_err = None
     for attempt in range(attempts):
