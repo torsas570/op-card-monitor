@@ -48,6 +48,32 @@ vacias = sorted(name for name, h in health.items() if h.get("empty_streak", 0) >
 # Configuradas pero sin datos: colección vacía o que nunca ha respondido
 sin_datos = [s["name"] for s in CONFIG["sites"] if s["name"] not in sites_state]
 
+# Problemas persistentes que antes solo se veían en los logs de Actions.
+_ahora = time.time()
+nunca = sorted(n for n, h in health.items()
+               if h.get("checks", 0) >= 200 and not h.get("max_products"))
+viejas = sorted((n for n, h in health.items()
+                 if h.get("down_since") and _ahora - h["down_since"] > 7 * 86400),
+                key=lambda n: health[n]["down_since"])
+
+
+def _motivo(n):
+    e = (health[n].get("last_error") or "")
+    for clave, txt in (("403", "403"), ("no-JSON", "no-JSON"), ("timed out", "timeout"),
+                       ("429", "429"), ("404", "404"), ("SSL", "SSL")):
+        if clave in e:
+            return txt
+    return "error"
+
+
+extra_salud = ""
+if nunca:
+    extra_salud += (f"\n🕳️ <b>Nunca han devuelto nada ({len(nunca)})</b>: "
+                    + " · ".join(nunca[:8]) + (f" y {len(nunca) - 8} más" if len(nunca) > 8 else ""))
+if viejas:
+    extra_salud += (f"\n🗑️ <b>Caídas hace más de 7 días ({len(viejas)})</b>, candidatas a quitar: "
+                    + " · ".join(f"{n} ({_motivo(n)})" for n in viejas[:8]))
+
 # Prueba de vida REAL: monitor.py apunta en "__run__" cuándo completó su última
 # pasada. Antes este mensaje decía "bot vivo" siempre, aunque monitor.py petara en
 # cada pasada. El state llega por la caché, que el bucle guarda al acabar cada
@@ -81,6 +107,8 @@ if caidas:
 if vacias:
     lines += ["", f"👻 A 0 productos ({len(vacias)}):"]
     lines += [f"  • {n} ({health[n].get('empty_streak', 0)} pasadas)" for n in vacias[:10]]
+if extra_salud:
+    lines += [""] + [l for l in extra_salud.split("\n") if l]
 if sin_datos:
     lines += ["", f"🔍 Sin datos todavía ({len(sin_datos)}):"]
     lines += [f"  • {n}" for n in sin_datos[:10]]

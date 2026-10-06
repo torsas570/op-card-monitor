@@ -1,0 +1,26 @@
+name: Revisar config y motor
+
+# Un error en config.json no rompe nada a la vista: la tienda simplemente deja
+# de verse. Esto lo convierte en un ❌ en GitHub (y un correo) en cada push.
+on:
+  push:
+    paths:
+      - config.json
+      - monitor.py
+      - check_config.py
+      - tests/**
+      - .github/workflows/check.yml
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python3 check_config.py
+      - run: python3 tests/test_motor.py

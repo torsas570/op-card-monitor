@@ -44,6 +44,8 @@ import os
 import sys
 import argparse
 import traceback
+import threading
+from collections import defaultdict
 import html as html_mod
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -73,7 +75,7 @@ PRIORITY_EMOJI = {"high": "🚨", "medium": "📦", "low": "🔍"}
 OOS_KEYWORDS = [
     # Sin "vendido": la etiqueta "Más vendido" marcaba agotado un producto en stock.
     "agotad", "fuera de stock", "sin existencias", "sin stock",
-    "no disponible", "sold out", "out of stock",
+    "no disponible", "sold out", "out of stock", "soon available",
     "rupture de stock", "esgotado", "esaurito", "ausverkauft", "uitverkocht",
 ]
 # El marcador casi nunca está en la raíz de la miniatura: PrestaShop lo cuelga de
@@ -148,9 +150,12 @@ def _record_health(state, name, ok, error=None, n_products=None):
     health = state.setdefault(HEALTH_KEY, {})
     h = health.setdefault(name, {"fails": 0, "alerted": False, "last_error": None})
     h["skips"] = 0  # se acaba de comprobar: el contador de saltos del backoff se reinicia
+    h.setdefault("first_seen", time.time())
     if ok:
         h["fails"] = 0
         h["last_error"] = None
+        h.pop("down_since", None)
+        h["checks"] = h.get("checks", 0) + 1  # pasadas con respuesta (para "nunca ha dado nada")
         # Racha de pasadas buenas: una tienda intermitente (Friki Galaxy) no se da
         # por recuperada con UNA respuesta suelta (ver _collect_health_alerts).
         h["ok_streak"] = h.get("ok_streak", 0) + 1
@@ -163,6 +168,7 @@ def _record_health(state, name, ok, error=None, n_products=None):
                 h["empty_streak"] = h.get("empty_streak", 0) + 1
     else:
         h["fails"] = h.get("fails", 0) + 1
+        h.setdefault("down_since", time.time())  # para "caída más de 7 días" en el heartbeat
         h["ok_streak"] = 0
         h["last_error"] = error
 
@@ -455,6 +461,10 @@ def extract_products_api(data, base_url="", currency="€"):
                     # salía a "1436.95€" cuando son libras, y Kantocards va en pesos MXN.
                     price = f"{p_raw}{currency}"
                 in_stock = any(v.get("available", False) for v in variants)
+            # Enlace directo a la cesta: /cart/<variante>:1 crea el carrito con la
+            # primera variante DISPONIBLE y lleva al pago. Sin sesión iniciada.
+            disponible = next((v for v in variants if v.get("available") and v.get("id")), None)
+            cart_url = f"{base}/cart/{disponible['id']}:1" if base and disponible else ""
             # uid ESTABLE: solo el id del producto. Antes incluía el título, así que
             # cualquier retoque del título ("PREVENTA X" -> "X") cambiaba el uid y el
             # producto volvía a parecer nuevo -> el mismo enlace se avisaba otra vez
@@ -465,7 +475,8 @@ def extract_products_api(data, base_url="", currency="€"):
                 hashlib.md5(f"{pid}{title}".encode()).hexdigest()
             legacy = hashlib.md5(f"{pid}{title}".encode()).hexdigest()
             products.append({"uid": uid, "legacy_uid": legacy, "title": title,
-                             "link": link, "price": price, "in_stock": in_stock})
+                             "link": link, "price": price, "in_stock": in_stock,
+                             "cart_url": cart_url})
         return products
 
     # WooCommerce Store API
@@ -488,17 +499,26 @@ def extract_products_api(data, base_url="", currency="€"):
         stock_text = ""
         if isinstance(availability, dict):
             stock_text = html_mod.unescape(availability.get("text") or "")
+        quedan = item.get("low_stock_remaining")
+        if not stock_text and isinstance(quedan, int) and quedan > 0:
+            stock_text = f"Quedan {quedan}"
         pid = item.get("id", "")
+        # ?add-to-cart=<id> solo vale para productos SIMPLES: los variables
+        # necesitan elegir variante, y ahí el botón llevaría a un error.
+        cart_url = ""
+        if pid and link and in_stock and item.get("type", "simple") == "simple":
+            cart_url = f"{link}{'&' if '?' in link else '?'}add-to-cart={pid}"
         uid = hashlib.md5(f"woo:{pid}".encode()).hexdigest() if pid else \
             hashlib.md5(f"{pid}{title}".encode()).hexdigest()
         legacy = hashlib.md5(f"{pid}{title}".encode()).hexdigest()
         products.append({"uid": uid, "legacy_uid": legacy, "title": title,
                          "link": link, "price": price, "in_stock": in_stock,
-                         "stock_text": stock_text, "backorder": bool(item.get("is_on_backorder"))})
+                         "stock_text": stock_text, "backorder": bool(item.get("is_on_backorder")),
+                         "cart_url": cart_url})
     return products
 
 
-def send_telegram(bot_token, chat_id, message, attempts=4, silent=False):
+def send_telegram(bot_token, chat_id, message, attempts=4, silent=False, reply_markup=None):
     """Envía un mensaje y devuelve True/False según haya salido.
 
     Devolver el resultado es lo que permite NO dar por avisado un producto cuyo
@@ -512,6 +532,8 @@ def send_telegram(bot_token, chat_id, message, attempts=4, silent=False):
         # Los avisos de salud llegan al chat pero NO hacen sonar el móvil: así el
         # ruido de mantenimiento no compite con un restock de verdad.
         payload["disable_notification"] = True
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     for attempt in range(attempts):
         try:
             resp = requests.post(url, json=payload, timeout=20)
@@ -534,6 +556,12 @@ def send_telegram(bot_token, chat_id, message, attempts=4, silent=False):
             log.warning(f"Telegram {resp.status_code}, reintento {attempt + 1}/{attempts}")
             time.sleep(2 * (attempt + 1))
             continue
+        if resp.status_code == 400 and "reply_markup" in payload:
+            # Un botón con un enlace que Telegram no acepta tumbaría el aviso entero:
+            # se reintenta SIN botones, que el aviso llegue es lo que importa.
+            log.warning(f"Telegram rechazó los botones ({resp.text[:150]}), reenvío sin ellos")
+            payload.pop("reply_markup")
+            continue
         # 400 y demás: el mensaje es inválido, reintentar no arregla nada
         log.error(f"Error enviando Telegram: {resp.status_code} {resp.text[:300]}")
         return False
@@ -541,13 +569,38 @@ def send_telegram(bot_token, chat_id, message, attempts=4, silent=False):
     return False
 
 
-def send_telegram_chunks(bot_token, chat_id, messages, silent=False):
-    """Envía una lista de trozos. True solo si TODOS salen."""
+def send_telegram_chunks(bot_token, chat_id, messages, silent=False, reply_markup=None):
+    """Envía una lista de trozos. True solo si TODOS salen. Los botones van en el
+    último trozo, que es el que queda abajo del todo en el chat."""
     ok = True
-    for msg in messages:
-        if not send_telegram(bot_token, chat_id, msg, silent=silent):
+    for i, msg in enumerate(messages):
+        markup = reply_markup if i == len(messages) - 1 else None
+        if not send_telegram(bot_token, chat_id, msg, silent=silent, reply_markup=markup):
             ok = False
     return ok
+
+
+def cart_keyboard(entradas, config):
+    """Botones "🛒 Añadir" para lo que está EN STOCK y tiene enlace de cesta, lo más
+    prioritario primero. `entradas` = [(alerta, tienda o None)]. En un drop, abrir
+    la ficha y buscar el botón cuesta segundos que deciden si llegas o no."""
+    if not config.get("cart_buttons", True):
+        return None
+    vistos, filas = set(), []
+    orden = sorted(entradas, key=lambda t: product_rank(t[0]))
+    for a, tienda in orden:
+        url = a.get("cart_url")
+        if not url or not a.get("in_stock") or url in vistos:
+            continue
+        vistos.add(url)
+        nombre = a["title"] if len(a["title"]) <= 30 else a["title"][:29] + "…"
+        texto = f"🛒 {rank_mark(a) + ' ' if rank_mark(a) else ''}{nombre}"
+        if tienda:
+            texto += f" · {tienda[:18]}"
+        filas.append([{"text": texto, "url": url}])
+        if len(filas) >= config.get("max_cart_buttons", 8):
+            break
+    return {"inline_keyboard": filas} if filas else None
 
 
 def is_priority(p, config=None):
@@ -662,6 +715,42 @@ def plan_fetch(name, health, config):
     return (False, 0, 0)
 
 
+WOO_FIELDS = ("id,name,permalink,prices,is_in_stock,has_stock,is_on_backorder,"
+              "low_stock_remaining,stock_availability,type")
+_COOKIES = {}
+
+
+def _cookie_challenge(url, config, timeout):
+    """Algunas tiendas (Friki de Nacimiento) no sirven nada hasta que el navegador
+    ejecuta un `document.cookie = 'dhd2=<hex>'` de su portada: sin ella la API da
+    HTTP 202 con HTML y el bot lo veía como "respuesta no-JSON" en cada pasada.
+    Se pide la portada, se saca la cookie y se reutiliza (dura 24 h)."""
+    base = "{0.scheme}://{0.netloc}/".format(urlparse(url))
+    if base in _COOKIES:
+        return _COOKIES[base]
+    try:
+        r = requests.get(base, headers=build_headers(config["user_agent"]), timeout=timeout)
+        m = re.search(r"document\.cookie\s*=\s*['\"]([^=;'\"]+)=([^;'\"]+)", r.text)
+    except Exception as e:
+        log.warning(f"  cookie de {base}: {e}")
+        return None
+    if not m:
+        return None
+    _COOKIES[base] = f"{m.group(1)}={m.group(2)}"
+    return _COOKIES[base]
+
+
+# Una petición a la vez por DOMINIO: con 12 hilos, Sunny Store recibía sus 7
+# colecciones a la vez, y Shopify limita más a los bots desde mayo de 2026.
+_DOMINIO_LOCKS = defaultdict(threading.Lock)
+
+
+def fetch_site_serial(site_cfg, config, timeout=None, attempts=2):
+    dominio = urlparse(site_cfg["url"]).netloc.lower().removeprefix("www.")
+    with _DOMINIO_LOCKS[dominio]:
+        return fetch_site(site_cfg, config, timeout=timeout, attempts=attempts)
+
+
 def fetch_site(site_cfg, config, timeout=None, attempts=2):
     """SOLO red y parseo. No toca el state, así puede correr en paralelo.
 
@@ -688,6 +777,12 @@ def fetch_site(site_cfg, config, timeout=None, attempts=2):
         # respuesta fresca (`x-litespeed-cache: miss`); la API lo ignora. Solo se
         # toca la petición: la firma y el tope (`per_page`) salen de la URL del config.
         url = f"{url}{'&' if '?' in url else '?'}_cb={int(time.time())}"
+        # Solo los campos que usa el bot: la respuesta baja de ~1 MB a ~55 KB.
+        url += "&_fields=" + WOO_FIELDS
+    if site_cfg.get("cookie_challenge"):
+        cookie = _cookie_challenge(url, config, timeout)
+        if cookie:
+            headers["Cookie"] = cookie
 
     last_err = None
     for attempt in range(attempts):
@@ -757,7 +852,8 @@ def requested_cap(url):
     """
     query = parse_qs(urlparse(url).query)
     for key, values in query.items():
-        if key.lower() in ("limit", "per_page", "resultsperpage") and values:
+        # "n" = resultados por página en PrestaShop 1.6 (Nin-Nin-Game)
+        if key.lower() in ("limit", "per_page", "resultsperpage", "n") and values:
             try:
                 return int(values[0])
             except (TypeError, ValueError):
@@ -1065,7 +1161,7 @@ def run_once(priority_filter=None):
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         results = list(pool.map(
-            lambda s: fetch_site(s, config, timeout=plan[s["name"]][1], attempts=plan[s["name"]][2]),
+            lambda s: fetch_site_serial(s, config, timeout=plan[s["name"]][1], attempts=plan[s["name"]][2]),
             a_consultar))
     extra = ""
     if degradadas:
@@ -1132,7 +1228,8 @@ def run_once(priority_filter=None):
                  f"-> un solo mensaje agrupado")
         msgs = format_avalanche(con_alertas, config)
         silent = solo_prioritarios and not is_loud(todas, config)
-        if send_telegram_chunks(bot_token, chat_id, msgs, silent=silent):
+        botones = cart_keyboard([(a, name) for name, _, alerts, _ in con_alertas for a in alerts], config)
+        if send_telegram_chunks(bot_token, chat_id, msgs, silent=silent, reply_markup=botones):
             for name, _, alerts, new_site_state in con_alertas:
                 commit(name, new_site_state)
                 n_alertas += len(alerts)
@@ -1143,7 +1240,8 @@ def run_once(priority_filter=None):
         for name, priority, alerts, new_site_state in con_alertas:
             msgs = format_notification(name, priority, alerts, config)
             silent = solo_prioritarios and not is_loud(alerts, config)
-            if send_telegram_chunks(bot_token, chat_id, msgs, silent=silent):
+            botones = cart_keyboard([(a, None) for a in alerts], config)
+            if send_telegram_chunks(bot_token, chat_id, msgs, silent=silent, reply_markup=botones):
                 commit(name, new_site_state)
                 n_alertas += len(alerts)
             else:
@@ -1176,6 +1274,7 @@ def run_once(priority_filter=None):
     state[RUN_META_KEY] = {"last_run": time.time(), "sites_ok": n_ok,
                            "sites_failed": len(results) - n_ok, "skipped": len(saltadas)}
     save_state(state)
+    ping_healthcheck()
     if not n_alertas:
         log.info("Sin alertas en esta revisión")
 
@@ -1199,6 +1298,19 @@ def prune_state(state, config):
     if huerfanas:
         log.info(f"State: {len(huerfanas)} tiendas que ya no están en config, borradas "
                  f"({', '.join(huerfanas[:5])}{'...' if len(huerfanas) > 5 else ''})")
+
+
+def ping_healthcheck(fallo=False):
+    """Señal de vida EXTERNA (healthchecks.io). Si GitHub desactiva Actions o se
+    para todo, aquí no corre nada que pueda avisar: healthchecks.io avisa solo si
+    deja de recibir pings. Sin la variable HEALTHCHECK_URL no hace nada."""
+    url = os.environ.get("HEALTHCHECK_URL")
+    if not url:
+        return
+    try:
+        requests.get(url.rstrip("/") + ("/fail" if fallo else ""), timeout=5)
+    except Exception as e:
+        log.warning(f"healthcheck no enviado: {e}")
 
 
 def notify_crash(exc_text):
@@ -1245,6 +1357,7 @@ def run_once_guarded(priority_filter=None):
         raise
     except Exception:
         notify_crash(traceback.format_exc())
+        ping_healthcheck(fallo=True)
         raise
     if CRASH_FLAG.exists():
         try:
