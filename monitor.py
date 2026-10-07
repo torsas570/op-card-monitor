@@ -1554,7 +1554,12 @@ def ping_healthcheck(fallo=False):
     if not url:
         return
     try:
-        requests.get(url.rstrip("/") + ("/fail" if fallo else ""), timeout=5)
+        r = requests.get(url.rstrip("/") + ("/fail" if fallo else ""), timeout=5)
+        if r.status_code != 200:
+            # Un check borrado o una URL mal copiada responde 404/400 y el bot
+            # seguiría como si nada: healthchecks.io no recibiría señales y,
+            # peor, nunca avisaría porque no sabe que existe.
+            log.warning(f"healthcheck rechazado (HTTP {r.status_code}): revisa HEALTHCHECK_URL")
     except Exception as e:
         log.warning(f"healthcheck no enviado: {e}")
 
