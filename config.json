@@ -611,6 +611,16 @@
       ]
     },
     {
+      "_comment": "Preventas de Fridam (feed mixto): ahí sale primero lo nuevo, p. ej. el case de OP-18. La colección 'one-piece-tcg' ya llega al tope de 250 y no va por fecha.",
+      "name": "Fridam Store (Próximamente OP)",
+      "url": "https://fridamstore.com/collections/proximamente/products.json?limit=250",
+      "type": "api",
+      "priority": "high",
+      "include_keywords": [
+        "one piece"
+      ]
+    },
+    {
       "_comment": "=== Micelion Games (WooCommerce Store API) — anadida sep-2026. La categoria 28 mezcla 28 inscripciones de torneo con los 60 productos reales. ===",
       "name": "Micelion Games",
       "url": "https://miceliongames.com/wp-json/wc/store/v1/products?per_page=100&category=28&orderby=date",
