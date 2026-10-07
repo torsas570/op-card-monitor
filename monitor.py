@@ -106,6 +106,8 @@ CRASH_FLAG = BASE_DIR / ".crash_notified"  # evita repetir el aviso de caída en
 DEFAULT_RECOVER_PASSES = 3  # pasadas buenas SEGUIDAS para dar por recuperada una tienda
 DEFAULT_ANOMALY_ACCEPT = 3  # pasadas seguidas con la misma desaparición masiva para aceptarla
 DEFAULT_MASS_RESTOCK = 15   # restocks de golpe en UNA tienda (y >=30% de lo vigilado) = reajuste, no drop
+DEFAULT_RESTOCK_COOLDOWN_MIN = 60  # el mismo producto que se repone otra vez antes de esto: sin sonido
+DEFAULT_NEW_MAX_AGE_DAYS = 7       # producto publicado hace más que esto que aparece ahora: no es "nuevo"
 DEFAULT_HEALTH_FAIL_THRESHOLD = 10  # fallos seguidos antes de avisar (~10 min a 1 pasada/min)
 DEFAULT_EMPTY_THRESHOLD = 5        # pasadas a 0 productos (habiendo tenido catálogo) antes de avisar
 DEFAULT_DIGEST_COOLDOWN_MIN = 30   # minutos mínimos entre dos resúmenes de salud
@@ -479,9 +481,16 @@ def extract_products_api(data, base_url="", currency="€"):
             uid = hashlib.md5(f"shopify:{pid}".encode()).hexdigest() if pid else \
                 hashlib.md5(f"{pid}{title}".encode()).hexdigest()
             legacy = hashlib.md5(f"{pid}{title}".encode()).hexdigest()
+            publicado = None
+            try:
+                from datetime import datetime
+                publicado = datetime.fromisoformat(item["published_at"]).timestamp() \
+                    if item.get("published_at") else None
+            except (ValueError, TypeError):
+                pass
             products.append({"uid": uid, "legacy_uid": legacy, "title": title,
                              "link": link, "price": price, "in_stock": in_stock,
-                             "cart_url": cart_url})
+                             "cart_url": cart_url, "published": publicado})
         return products
 
     # WooCommerce Store API
@@ -602,6 +611,15 @@ def edit_telegram(bot_token, chat_id, message_id, text, reply_markup):
                "reply_markup": reply_markup or {"inline_keyboard": []}}
     try:
         resp = requests.post(url, json=payload, timeout=20)
+        if resp.status_code == 429:
+            # Muchos agotados a la vez: Telegram pide esperar. Un reintento; si no,
+            # queda para la pasada siguiente.
+            try:
+                espera = int(resp.json().get("parameters", {}).get("retry_after", 3))
+            except Exception:
+                espera = 3
+            time.sleep(min(espera, 30) + 1)
+            resp = requests.post(url, json=payload, timeout=20)
     except Exception as e:
         log.warning(f"Telegram (editar), error de red: {e}")
         return False
@@ -648,7 +666,8 @@ def is_loud(alerts, config=None):
     """¿Merece este aviso hacer sonar el móvil? Solo si lleva algo prioritario
     (UPC, booster box, case, ETB...). Una lata o un blíster llegan al chat en
     silencio: así lo gordo no se pierde entre lo flojo."""
-    return any(is_priority(a, config) for a in alerts)
+    # Un restock repetido en menos de una hora no vuelve a hacer sonar el móvil.
+    return any(is_priority(a, config) and not a.get("repeat") for a in alerts)
 
 
 def _chunk_message(title_line, blocks):
@@ -775,12 +794,31 @@ def _cookie_challenge(url, config, timeout):
     return _COOKIES[base]
 
 
+RATE_LIMIT_ERR = "LIMITE"   # prefijo de error para 429/430: no es una caída de la tienda
+SHOPIFY_PAUSE_AFTER = 3     # tiendas Shopify con 429/430 en una pasada para pausar Shopify entera
+SHOPIFY_PAUSE_SECONDS = 300
+_RL = {"n": 0, "pausa": False}
+_RL_LOCK = threading.Lock()
+
+
+def _nota_rate_limit():
+    """Shopify limita por IP a nivel de PLATAFORMA: el 07/10 dio 429 en 34 tiendas
+    a la vez y la pasada duró 9 min. A partir de 3 tiendas en una pasada, el resto
+    de Shopify se salta (y unos minutos más, ver run_once)."""
+    with _RL_LOCK:
+        _RL["n"] += 1
+        if _RL["n"] >= SHOPIFY_PAUSE_AFTER:
+            _RL["pausa"] = True
+
+
 # Una petición a la vez por DOMINIO: con 12 hilos, Sunny Store recibía sus 7
 # colecciones a la vez, y Shopify limita más a los bots desde mayo de 2026.
 _DOMINIO_LOCKS = defaultdict(threading.Lock)
 
 
 def fetch_site_serial(site_cfg, config, timeout=None, attempts=2):
+    if _RL["pausa"] and "products.json" in site_cfg["url"]:
+        return site_cfg, None, f"{RATE_LIMIT_ERR} pausa"
     dominio = urlparse(site_cfg["url"]).netloc.lower().removeprefix("www.")
     with _DOMINIO_LOCKS[dominio]:
         return fetch_site(site_cfg, config, timeout=timeout, attempts=attempts)
@@ -819,18 +857,31 @@ def fetch_site(site_cfg, config, timeout=None, attempts=2):
         if cookie:
             headers["Cookie"] = cookie
 
+    es_shopify = "products.json" in url
     last_err = None
     for attempt in range(attempts):
         try:
             resp = requests.get(url, headers=headers, timeout=timeout)
+            if resp.status_code in (429, 430):
+                # Límite de peticiones (430 = "Security Rejection" de Shopify). Reintentar
+                # a los 2 s solo duplica la carga estando limitado: se deja para la
+                # siguiente pasada, y si son varias tiendas Shopify a la vez se pausa
+                # Shopify entera unos minutos (ver run_once).
+                if es_shopify:
+                    _nota_rate_limit()
+                log.warning(f"  {name}: HTTP {resp.status_code} (límite de peticiones), sin reintento")
+                return site_cfg, None, f"{RATE_LIMIT_ERR} {resp.status_code}"
             resp.raise_for_status()
             if is_api:
                 ctype = resp.headers.get("Content-Type", "").lower()
                 if "json" not in ctype:
                     # Cloudflare/anti-bot devolvió HTML en vez del JSON
                     raise ValueError(f"respuesta no-JSON (Content-Type: {ctype or 'desconocido'})")
+                data = resp.json()
+                if es_shopify and "/collections/" in url:
+                    data = _paginar_shopify(data, url, headers, timeout, site_cfg, config)
                 return site_cfg, extract_products_api(
-                    resp.json(), base_url=url, currency=site_cfg.get("currency", "€")
+                    data, base_url=url, currency=site_cfg.get("currency", "€")
                 ), None
             return site_cfg, extract_products_html(resp.text, site_cfg), None
         except Exception as e:
@@ -841,6 +892,32 @@ def fetch_site(site_cfg, config, timeout=None, attempts=2):
     return site_cfg, None, str(last_err)
 
 
+def _paginar_shopify(data, url, headers, timeout, site_cfg, config):
+    """Colección Shopify llena hasta el tope: pedir las páginas siguientes.
+
+    `/collections/x/products.json` sigue el orden MANUAL de la colección (no por
+    fecha): con 264 productos en Fridam, 14 no se veían nunca. Se piden hasta
+    `shopify_max_pages` páginas (3) dentro del mismo turno del dominio. El
+    catálogo de tienda entera (`/products.json`) no se pagina: va por fecha y lo
+    nuevo está siempre en la primera página.
+    """
+    limite = requested_cap(url) or 30
+    productos = list(data.get("products") or [])
+    paginas = 1
+    while len(productos) == limite * paginas and paginas < config.get("shopify_max_pages", 3):
+        paginas += 1
+        r = requests.get(f"{url}&page={paginas}", headers=headers, timeout=timeout)
+        if r.status_code != 200 or "json" not in r.headers.get("Content-Type", "").lower():
+            break
+        mas = r.json().get("products") or []
+        productos += mas
+        if len(mas) < limite:
+            break
+    # Para la detección de desaparecidos: lleno solo si la ÚLTIMA página vino llena.
+    site_cfg["_cap"] = limite * paginas if len(productos) >= limite * paginas else None
+    return {"products": productos}
+
+
 # Lo que decide QUÉ productos ve el bot en una tienda. Si cambia (URL nueva, más
 # resultados por página, keywords nuevas...), aparecen de golpe productos que ya
 # existían y que el state no conocía -> tanda de falsos "NUEVO". Antes había que
@@ -849,7 +926,7 @@ SITE_SIG_FIELDS = ("url", "type", "selector", "title_selector", "link_selector",
 GLOBAL_SIG_FIELDS = ("required_keywords", "required_any_keywords", "required_patterns", "exclude_keywords")
 # Subir cuando un cambio del MOTOR amplíe lo que se ve (p. ej. completar títulos
 # cortados, que hizo pasar el filtro a productos que antes no lo pasaban).
-COVERAGE_VERSION = 1
+COVERAGE_VERSION = 2  # 2: paginación de colecciones Shopify llenas (07/10/2026)
 
 
 def site_signature(site_cfg, config):
@@ -930,7 +1007,7 @@ def process_site(site_cfg, products, state, config, informe=None):
     match_label = config.get("match_label", "el filtro")
 
     # El tope se mide sobre el listado CRUDO, antes de filtrar por keywords.
-    cap = requested_cap(url)
+    cap = site_cfg["_cap"] if "_cap" in site_cfg else requested_cap(url)
     truncado = cap is not None and len(products) >= cap
 
     n_antes = len(products)
@@ -993,6 +1070,9 @@ def process_site(site_cfg, products, state, config, informe=None):
 
     alerts = []
     absorbidos = 0
+    ahora = time.time()
+    cooldown = config.get("restock_cooldown_minutes", DEFAULT_RESTOCK_COOLDOWN_MIN) * 60
+    edad_max = config.get("new_max_age_days", DEFAULT_NEW_MAX_AGE_DAYS) * 86400
     for p in products:
         uid = p["uid"]
         prev = site_state.get(uid)
@@ -1003,12 +1083,20 @@ def process_site(site_cfg, products, state, config, informe=None):
             # catálogo y dispararía una tanda enorme de avisos falsos.
             prev = site_state.pop(p["legacy_uid"], None)
         mark_priority(p, config)
+        estado = {"in_stock": p["in_stock"]}
         if prev is None:
-            # Producto nuevo
+            # Producto nuevo... salvo que se publicara hace tiempo (Shopify da la
+            # fecha): entonces solo ha entrado ahora en el listado (lo han movido de
+            # colección, o se ha colado en la ventana de un catálogo). Agotado no se
+            # avisa; en stock se avisa como "vuelve", no como "nuevo".
+            viejo = bool(p.get("published")) and ahora - p["published"] > edad_max
             if rebaseline:
                 absorbidos += 1
             elif not is_first_run:
-                if p["in_stock"] or not notify_only_in_stock or \
+                if viejo:
+                    if p["in_stock"]:
+                        alerts.append({**p, "alert_type": "restock"})
+                elif p["in_stock"] or not notify_only_in_stock or \
                         (notify_new_oos_priority and is_priority(p, config)):
                     alerts.append({**p, "alert_type": "new"})
             else:
@@ -1016,11 +1104,26 @@ def process_site(site_cfg, products, state, config, informe=None):
                 if p["in_stock"]:
                     alerts.append({**p, "alert_type": "new"})
         else:
-            # Producto conocido — detectar restock
+            # Producto conocido — detectar restock. Se conservan los campos extra
+            # del state (last_restock) y se limpia "gone" si ha reaparecido.
+            estado = {k: v for k, v in prev.items() if k != "gone"}
+            estado["in_stock"] = p["in_stock"]
             was_oos = not prev.get("in_stock", True)
             if was_oos and p["in_stock"]:
-                alerts.append({**p, "alert_type": "restock"})
-        site_state[uid] = {"in_stock": p["in_stock"]}
+                a = {**p, "alert_type": "restock"}
+                ultimo = prev.get("last_restock")
+                if ultimo and ahora - ultimo < cooldown:
+                    # Se repone OTRA VEZ en menos de una hora: la tienda está tocando
+                    # el stock (Fridam, 06/10: el mismo producto entraba y salía cada
+                    # pocos minutos). Lo prioritario llega marcado y sin sonido; lo
+                    # flojo no se repite.
+                    a["repeat"] = True
+                    if not is_priority(p, config):
+                        a = None
+                if a:
+                    alerts.append(a)
+                estado["last_restock"] = ahora
+        site_state[uid] = estado
 
     if rebaseline:
         log.info(f"  {name}: URL/filtros cambiados -> re-baseline silencioso "
@@ -1055,24 +1158,28 @@ def process_site(site_cfg, products, state, config, informe=None):
             h["anomalo_streak"] = 0
         if desaparecidos:
             for uid in desaparecidos:
-                site_state[uid] = {"in_stock": False, "gone": True}
+                site_state[uid] = {**site_state[uid], "in_stock": False, "gone": True}
             log.info(f"  {name}: {len(desaparecidos)} desaparecidos del listado, "
                      f"marcados agotados (avisarán si reaparecen)")
 
-    # Reajuste masivo de inventario: tras un mantenimiento, Fridam pasó 41 productos
-    # a disponibles de golpe y fue activando y desactivando stock media hora (el
-    # 06/10, de madrugada: 41 + 12 "restocks" y 11 "agotados" en minutos). Un drop
-    # real no repone media tienda a la vez. Se resume en UNA línea silenciosa con
-    # lo prioritario listado, en vez de un aviso por producto.
+    # Muchos restocks de golpe en una tienda: puede ser un reajuste de inventario
+    # (Fridam, 06/10, tras un mantenimiento) o una preventa que abre entera de una
+    # vez, que es JUSTO lo que se busca. Por eso lo prioritario se avisa SIEMPRE con
+    # normalidad y solo lo flojo se resume en una línea silenciosa. (La versión del
+    # 07/10 lo resumía todo y habría silenciado 24 preventas del 30 aniv abiertas a
+    # la vez.) Lo que de verdad corta el ruido de una tienda que activa y desactiva
+    # stock es el enfriamiento por producto de arriba (`restock_cooldown_minutes`).
     restocks = [a for a in alerts if a["alert_type"] == "restock"]
     umbral = config.get("mass_restock_threshold", DEFAULT_MASS_RESTOCK)
     if umbral and len(restocks) > umbral and len(restocks) >= 0.3 * max(1, len(site_state)):
-        log.warning(f"  {name}: {len(restocks)} restocks de golpe (de {len(site_state)}) -> "
-                    f"reajuste de inventario, se resume sin avisar uno a uno")
-        if informe is not None:
-            informe.setdefault("masivos", []).append(
-                (name, len(restocks), sorted(restocks, key=product_rank)))
-        alerts = [a for a in alerts if a["alert_type"] != "restock"]
+        flojos = [a for a in restocks if not is_priority(a, config) and not a.get("promo")]
+        log.warning(f"  {name}: {len(restocks)} restocks de golpe (de {len(site_state)}): "
+                    f"{len(restocks) - len(flojos)} prioritarios se avisan, {len(flojos)} flojos se resumen")
+        if flojos:
+            if informe is not None:
+                informe.setdefault("masivos", []).append((name, len(flojos), flojos))
+            ids_flojos = {id(a) for a in flojos}
+            alerts = [a for a in alerts if id(a) not in ids_flojos]
 
     # Re-sync (opcional, `resync_threshold`): una tienda no publica 20 novedades
     # reales en una pasada de 2 minutos. Si pasa, ha recatalogado o cambiado el
@@ -1109,6 +1216,8 @@ def format_notification(site_name, priority, alerts, config=None):
     blocks = []
     for p in shown:
         tag = "🔄 VUELVE" if p["alert_type"] == "restock" else "🆕 NUEVO"
+        if p.get("repeat"):
+            tag += " (otra vez)"
         mark = rank_mark(p)
         mark = f"{mark} " if mark else ""
         stock_mark = "" if p["in_stock"] else " ⚠️ AGOTADO"
@@ -1165,6 +1274,8 @@ def format_avalanche(entradas, config):
     for a, tienda in shown:
         mark = rank_mark(a) or "•"
         tag = "🔄" if a["alert_type"] == "restock" else "🆕"
+        if a.get("repeat"):
+            tag += " (otra vez)"
         stock_mark = "" if a["in_stock"] else " ⚠️ AGOTADO"
         b = [f"{mark} {tag} <b>{html_mod.escape(a['title'])}</b>{stock_mark}",
              f"  💰 {html_mod.escape(a['price'])}" + (" ⏳ bajo pedido" if a.get("backorder") else "")
@@ -1190,6 +1301,7 @@ def run_once(priority_filter=None):
         log.error("⚠️  Falta TELEGRAM_BOT_TOKEN (env o config.json)")
         sys.exit(1)
 
+    ping_healthcheck(inicio=True)
     prune_state(state, config)
     check_official(state, config, bot_token, chat_id)
 
@@ -1213,6 +1325,15 @@ def run_once(priority_filter=None):
         h["skips"] = h.get("skips", 0) + 1
     degradadas = [s["name"] for s in a_consultar if plan[s["name"]][2] == 1]
 
+    # Pausa de Shopify por límite de peticiones (429/430 en varias tiendas a la vez):
+    # mientras dure, las tiendas Shopify se saltan sin contar como caídas.
+    enfriar = state.setdefault("__cooldown__", {})
+    _RL["n"] = 0
+    _RL["pausa"] = time.time() < enfriar.get("shopify", 0)
+    if _RL["pausa"]:
+        log.warning(f"Shopify en pausa por límite de peticiones hasta "
+                    f"{_hora_local(enfriar['shopify'], config)}: se saltan sus tiendas")
+
     workers = max(1, min(config.get("max_workers", DEFAULT_MAX_WORKERS), len(a_consultar) or 1))
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -1232,9 +1353,19 @@ def run_once(priority_filter=None):
     informe = {}
     sigs, dominios = {}, {}
     n_ok = 0
+    if _RL["pausa"] and time.time() >= enfriar.get("shopify", 0):
+        enfriar["shopify"] = time.time() + SHOPIFY_PAUSE_SECONDS
+        log.warning(f"Shopify limitó {_RL['n']} tiendas en esta pasada: pausa de "
+                    f"{SHOPIFY_PAUSE_SECONDS // 60} min")
+    n_limitadas = 0
     for site_cfg, products, err in results:
         name = site_cfg["name"]
         if products is None:
+            if str(err).startswith(RATE_LIMIT_ERR):
+                # Límite de peticiones o pausa: la tienda no está caída, no cuenta
+                # para la salud (ni para degradarla ni para el aviso de caída).
+                n_limitadas += 1
+                continue
             _record_health(state, name, ok=False, error=err)
             continue
         n_ok += 1
@@ -1249,14 +1380,25 @@ def run_once(priority_filter=None):
     def commit(name, site_state):
         # Lo que estaba EN STOCK y ahora no (o ha desaparecido del listado): si se
         # avisó en su día, ese aviso se editará como agotado.
-        viejo = state.get(name)
+        # Se confirma con DOS lecturas seguidas: un fallo puntual o una caché de la
+        # tienda no tachan un aviso que sigue siendo bueno.
         live = state.get(LIVE_KEY, {})
-        if isinstance(viejo, dict) and live:
-            for uid, v in site_state.items():
-                rec = live.get(f"{dominios[name]}|{uid}")
-                if rec and "agotado" not in rec and not v.get("in_stock", True) \
-                        and viejo.get(uid, {}).get("in_stock", False):
-                    rec["agotado"] = time.time()
+        if live:
+            pref = f"{dominios[name]}|"
+            for key, rec in live.items():
+                if not key.startswith(pref) or "agotado" in rec:
+                    continue
+                v = site_state.get(key[len(pref):])
+                if v is None:
+                    continue
+                if v.get("in_stock", True):
+                    rec.pop("oos_n", None)
+                    rec.pop("oos_ts", None)
+                    continue
+                rec["oos_n"] = rec.get("oos_n", 0) + 1
+                rec.setdefault("oos_ts", time.time())
+                if rec["oos_n"] >= 2:
+                    rec["agotado"] = rec["oos_ts"]
         # El state de la tienda y la firma con la que se vio van SIEMPRE juntos: si
         # el aviso no sale, ninguno de los dos se actualiza y se reintenta entero.
         state[name] = site_state
@@ -1342,11 +1484,10 @@ def run_once(priority_filter=None):
     if informe.get("masivos"):
         lineas = [f"🔁 <b>{html_mod.escape(config.get('bot_label', 'MONITOR'))} — reajuste de inventario</b>\n"]
         for n, c, items in informe["masivos"]:
-            lineas.append(f"• <b>{html_mod.escape(n)}</b>: {c} productos pasaron a disponibles de golpe "
-                          f"(suele ser la tienda reorganizando su stock, no un restock real).")
-            for a in items[:6]:
-                if rank_mark(a):
-                    lineas.append(f"   {rank_mark(a)} {html_mod.escape(a['title'][:70])} — {html_mod.escape(a['price'])}")
+            lineas.append(f"• <b>{html_mod.escape(n)}</b>: otros {c} productos (no prioritarios) pasaron a "
+                          f"disponibles de golpe. Lo prioritario se ha avisado aparte.")
+            for a in items[:5]:
+                lineas.append(f"   · {html_mod.escape(a['title'][:70])} — {html_mod.escape(a['price'])}")
             if items and items[0].get("link"):
                 u = urlparse(items[0]["link"])
                 lineas.append(f"   🔗 {u.scheme}://{u.netloc}/")
@@ -1576,7 +1717,7 @@ def prune_state(state, config):
                  f"({', '.join(huerfanas[:5])}{'...' if len(huerfanas) > 5 else ''})")
 
 
-def ping_healthcheck(fallo=False):
+def ping_healthcheck(fallo=False, inicio=False):
     """Señal de vida EXTERNA (healthchecks.io). Si GitHub desactiva Actions o se
     para todo, aquí no corre nada que pueda avisar: healthchecks.io avisa solo si
     deja de recibir pings. Sin la variable HEALTHCHECK_URL no hace nada."""
@@ -1584,7 +1725,9 @@ def ping_healthcheck(fallo=False):
     if not url:
         return
     try:
-        r = requests.get(url.rstrip("/") + ("/fail" if fallo else ""), timeout=5)
+        # /start al empezar: healthchecks mide lo que dura cada pasada y avisa
+        # también si una se queda colgada (el proceso vivo pero sin terminar).
+        r = requests.get(url.rstrip("/") + ("/fail" if fallo else "/start" if inicio else ""), timeout=5)
         if r.status_code != 200:
             # Un check borrado o una URL mal copiada responde 404/400 y el bot
             # seguiría como si nada: healthchecks.io no recibiría señales y,

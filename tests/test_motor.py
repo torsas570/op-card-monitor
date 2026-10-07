@@ -1,4 +1,4 @@
-import sys, os, json, importlib.util, copy
+import sys, os, json, importlib.util, copy, time
 os.environ["TELEGRAM_BOT_TOKEN"]="x"; os.environ["TELEGRAM_CHAT_ID"]="y"
 """Tests del motor (monitor.py), sin red ni Telegram: la red, el state y los envíos
 se simulan. Se cargan dos copias independientes del mismo motor: una con config
@@ -255,6 +255,8 @@ nuevo=P(2,"OP Booster Box OP-16"); nuevo["cart_url"]="https://ed.com/cart/22:1"
 ecat.append(nuevo); msgs=he.run()
 check(len(msgs)==1 and "OP-16" in str(he.state.get("__live__")), "producto avisado en stock queda registrado")
 ecat[1]=dict(nuevo, in_stock=False); he.run()
+check(len(he.edits)==0, "una sola lectura agotado: aún no se edita")
+he.run()
 check(len(he.edits)==1 and "❌" in he.edits[0][1] and "<s><b>OP Booster Box OP-16</b></s>" in he.edits[0][1], f"aviso editado como agotado: {he.edits}")
 check(he.edits and he.edits[0][2]["inline_keyboard"]==[], "botón de cesta retirado")
 check(not he.state.get("__live__"), "registro limpiado tras editar")
@@ -278,16 +280,55 @@ check(q["fresh_set"] and of.rank_mark(q)=="📅" and of.is_priority(q,fcfg), "li
 check(of._fecha_oficial("Release Nov. 20, 2026") and of._fecha_oficial("sin fecha") is None, "fechas oficiales")
 # --- reajuste masivo de inventario (Fridam, 06/10) ---
 ocfg["sites"]=[{"name":"FR","url":"https://fr.com/c/products.json?limit=250","type":"api"}]
-rcat=[P(i,f"OP Booster Box {i}",stock=False) for i in range(72)]
+rcat=[P(i,f"OP Starter Deck {i}",stock=False) for i in range(72)]
 hr2=Harness(o,ocfg,lambda s:(s,list(rcat),None)); hr2.run()
-for i in range(41): rcat[i]=P(i,f"OP Booster Box {i}",stock=True)
+for i in range(41): rcat[i]=P(i,f"OP Starter Deck {i}",stock=True)
 msgs=hr2.run()
-check(len(msgs)==1 and "reajuste de inventario" in msgs[0] and "41 productos" in msgs[0], f"41 restocks de 72 = un resumen: {[m[:60] for m in msgs]}")
+check(len(msgs)==1 and "reajuste de inventario" in msgs[0] and "41 productos" in msgs[0], f"41 restocks flojos de 72 = un resumen: {[m[:60] for m in msgs]}")
 check(not hr2.state.get("__live__"), "el reajuste no registra avisos para editar")
+# 24 preventas del 30 aniv abiertas a la vez: las 16 prioritarias SÍ avisan
+pcfg=copy.deepcopy(base); pcfg.update(required_keywords=["30th"],top_priority_keywords=["booster box"],high_value_keywords=["elite trainer box"],exclude_keywords=[])
+pcfg["sites"]=[{"name":"PV","url":"https://pv.com/c/products.json?limit=250","type":"api"}]
+tit=["30th Booster Box"]*8+["30th Elite Trainer Box"]*8+["30th Booster Pack"]*8
+pv=[P(500+i,f"{t} {i}",stock=False) for i,t in enumerate(tit)]
+mp=load("preventa")
+hp=Harness(mp,pcfg,lambda s:(s,list(pv),None)); hp.run()
+pv[:]=[dict(x,in_stock=True) for x in pv]; msgs=hp.run(); txt="".join(msgs)
+check(sum(txt.count(f"30th Booster Box {i}") for i in range(8))==8 and sum(txt.count(f"30th Elite Trainer Box {i}") for i in range(8,16))==8,
+      "preventa abierta entera: las 16 prioritarias se avisan con normalidad")
+check(any("reajuste" in x for x in msgs) and not any("30th Booster Pack 20" in x and "VUELVE" in x for x in msgs), "los 8 sobres van al resumen")
+# el mismo producto se repone otra vez en menos de 1 h: marcado y sin sonido
+pv[0]=dict(pv[0],in_stock=False); hp.run(); pv[0]=dict(pv[0],in_stock=True); msgs=hp.run()
+check(len(msgs)==1 and "(otra vez)" in msgs[0] and not m.is_loud([dict(pv[0],repeat=True,top_priority=True)],pcfg), "restock repetido: marcado y sin sonido")
+# producto publicado hace 200 días que aparece agotado: sin aviso
+viejo=P(900,"30th Booster Box vieja",stock=False); viejo["published"]=time.time()-200*86400
+pv.append(viejo); check(hp.run()==[], "producto viejo agotado que aparece: sin aviso")
+viejo2=P(901,"30th Booster Box vieja 2",stock=True); viejo2["published"]=time.time()-200*86400
+pv.append(viejo2); msgs=hp.run(); check(len(msgs)==1 and "VUELVE" in msgs[0] and "NUEVO" not in msgs[0], "producto viejo en stock: 'vuelve', no 'nuevo'")
 ocfg["sites"]=[{"name":"BIG","url":"https://big.com/c/products.json?limit=250","type":"api"}]
 bcat=[P(1000+i,f"OP Booster Box B{i}",stock=False) for i in range(240)]
 hb=Harness(o,ocfg,lambda s:(s,list(bcat),None)); hb.run()
 for i in range(20): bcat[i]=P(1000+i,f"OP Booster Box B{i}",stock=True)
 msgs=hb.run(); check(len(msgs)==1 and "reajuste" not in msgs[0] and "VUELVE" in msgs[0], "20 restocks de 240 = avisos normales")
+# --- paginación de colecciones Shopify llenas ---
+pg=load("pagina")
+def shop_items(a,b): return [{"id":i,"title":f"x{i}","handle":f"h{i}","variants":[{"id":i,"price":"1","available":True}]} for i in range(a,b)]
+paginas={"1":shop_items(0,250),"2":shop_items(250,264)}
+def fake_pg(url,headers=None,timeout=None):
+    n=url.split("page=")[1] if "page=" in url else "1"
+    return Resp(j={"products":paginas.get(n,[])})
+pg.requests.get=fake_pg
+sc={"name":"S","url":"https://s.com/collections/x/products.json?limit=250","type":"api"}
+_,prs,_=pg.fetch_site(sc,{"user_agent":"UA"})
+check(len(prs)==264 and sc.get("_cap") is None, f"colección de 264: se leen las 2 páginas ({len(prs)})")
+# --- 429 de Shopify: sin reintento y pausa tras 3 tiendas ---
+rl=load("limite"); llamadas=[]
+class R429:
+    status_code=429; headers={}; text=""
+rl.requests.get=lambda url,headers=None,timeout=None:(llamadas.append(url),R429())[1]
+rl._RL.update(n=0,pausa=False)
+for k in range(5):
+    _,pr,err=rl.fetch_site_serial({"name":f"T{k}","url":f"https://t{k}.com/collections/x/products.json?limit=250","type":"api"},{"user_agent":"UA"})
+check(len(llamadas)==3 and rl._RL["pausa"] and str(err).startswith(rl.RATE_LIMIT_ERR), f"429: sin reintento y pausa tras 3 tiendas ({len(llamadas)} peticiones)")
 print(f"\n{ok} OK, {fail} FAIL")
 sys.exit(1 if fail else 0)

@@ -21,7 +21,8 @@ GLOBAL_KEYS = {
     "max_alerts_per_site", "notify_only_in_stock", "notify_new_oos_priority", "silent_first_run",
     "mark_disappeared_oos", "resync_threshold", "cart_buttons", "max_cart_buttons",
     "edit_on_sold_out", "timezone", "official_sources", "official_check_minutes", "official_loud",
-    "set_code_pattern", "mass_restock_threshold",
+    "set_code_pattern", "mass_restock_threshold", "restock_cooldown_minutes", "new_max_age_days",
+    "shopify_max_pages",
     "required_keywords", "required_any_keywords", "required_patterns", "exclude_keywords",
     "top_priority_keywords", "high_value_keywords", "promo_keywords", "priority_exclude",
 }
