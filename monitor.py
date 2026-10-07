@@ -105,6 +105,7 @@ OFFICIAL_KEY = "__official__"  # clave reservada: páginas oficiales vistas y c�
 CRASH_FLAG = BASE_DIR / ".crash_notified"  # evita repetir el aviso de caída en cada pasada
 DEFAULT_RECOVER_PASSES = 3  # pasadas buenas SEGUIDAS para dar por recuperada una tienda
 DEFAULT_ANOMALY_ACCEPT = 3  # pasadas seguidas con la misma desaparición masiva para aceptarla
+DEFAULT_MASS_RESTOCK = 15   # restocks de golpe en UNA tienda (y >=30% de lo vigilado) = reajuste, no drop
 DEFAULT_HEALTH_FAIL_THRESHOLD = 10  # fallos seguidos antes de avisar (~10 min a 1 pasada/min)
 DEFAULT_EMPTY_THRESHOLD = 5        # pasadas a 0 productos (habiendo tenido catálogo) antes de avisar
 DEFAULT_DIGEST_COOLDOWN_MIN = 30   # minutos mínimos entre dos resúmenes de salud
@@ -900,7 +901,7 @@ def requested_cap(url):
     return None
 
 
-def process_site(site_cfg, products, state, config):
+def process_site(site_cfg, products, state, config, informe=None):
     """Filtra por keywords y compara con el state.
 
     Devuelve (alertas, nuevo_state_del_sitio, nº absorbidos por re-sync). NO
@@ -1058,6 +1059,21 @@ def process_site(site_cfg, products, state, config):
             log.info(f"  {name}: {len(desaparecidos)} desaparecidos del listado, "
                      f"marcados agotados (avisarán si reaparecen)")
 
+    # Reajuste masivo de inventario: tras un mantenimiento, Fridam pasó 41 productos
+    # a disponibles de golpe y fue activando y desactivando stock media hora (el
+    # 06/10, de madrugada: 41 + 12 "restocks" y 11 "agotados" en minutos). Un drop
+    # real no repone media tienda a la vez. Se resume en UNA línea silenciosa con
+    # lo prioritario listado, en vez de un aviso por producto.
+    restocks = [a for a in alerts if a["alert_type"] == "restock"]
+    umbral = config.get("mass_restock_threshold", DEFAULT_MASS_RESTOCK)
+    if umbral and len(restocks) > umbral and len(restocks) >= 0.3 * max(1, len(site_state)):
+        log.warning(f"  {name}: {len(restocks)} restocks de golpe (de {len(site_state)}) -> "
+                    f"reajuste de inventario, se resume sin avisar uno a uno")
+        if informe is not None:
+            informe.setdefault("masivos", []).append(
+                (name, len(restocks), sorted(restocks, key=product_rank)))
+        alerts = [a for a in alerts if a["alert_type"] != "restock"]
+
     # Re-sync (opcional, `resync_threshold`): una tienda no publica 20 novedades
     # reales en una pasada de 2 minutos. Si pasa, ha recatalogado o cambiado el
     # orden de la colección: lo flojo se absorbe con UN aviso de una línea, pero lo
@@ -1213,6 +1229,7 @@ def run_once(priority_filter=None):
 
     # --- 2) Proceso SECUENCIAL contra el state (evita carreras) ---
     pending, resyncs = [], []
+    informe = {}
     sigs, dominios = {}, {}
     n_ok = 0
     for site_cfg, products, err in results:
@@ -1224,7 +1241,7 @@ def run_once(priority_filter=None):
         _record_health(state, name, ok=True, n_products=len(products))
         sigs[name] = site_signature(site_cfg, config)
         dominios[name] = urlparse(site_cfg["url"]).netloc.lower().removeprefix("www.")
-        alerts, new_site_state, n_resync = process_site(site_cfg, products, state, config)
+        alerts, new_site_state, n_resync = process_site(site_cfg, products, state, config, informe)
         pending.append((name, site_cfg.get("priority", "medium"), alerts, new_site_state))
         if n_resync:
             resyncs.append((name, n_resync))
@@ -1321,6 +1338,19 @@ def run_once(priority_filter=None):
             f"absorbido sin detallar. Lo prioritario y los restocks se avisan aparte, nunca se absorben.",
             silent=True,
         )
+
+    if informe.get("masivos"):
+        lineas = [f"🔁 <b>{html_mod.escape(config.get('bot_label', 'MONITOR'))} — reajuste de inventario</b>\n"]
+        for n, c, items in informe["masivos"]:
+            lineas.append(f"• <b>{html_mod.escape(n)}</b>: {c} productos pasaron a disponibles de golpe "
+                          f"(suele ser la tienda reorganizando su stock, no un restock real).")
+            for a in items[:6]:
+                if rank_mark(a):
+                    lineas.append(f"   {rank_mark(a)} {html_mod.escape(a['title'][:70])} — {html_mod.escape(a['price'])}")
+            if items and items[0].get("link"):
+                u = urlparse(items[0]["link"])
+                lineas.append(f"   🔗 {u.scheme}://{u.netloc}/")
+        send_telegram(bot_token, chat_id, "\n".join(lineas), silent=True)
 
     # --- 5) Salud (caídas y tiendas ciegas): UN resumen, y en silencio ---
     health_msgs, deshacer_salud = _collect_health_alerts(state, config)

@@ -276,5 +276,18 @@ check(fcfg["_fresh_codes"]=={"OP-18","EB-06"}, "su código pasa a prioritario")
 q={"title":"One Piece EB06 [EN] Preventa"}; of.mark_priority(q,fcfg)
 check(q["fresh_set"] and of.rank_mark(q)=="📅" and of.is_priority(q,fcfg), "listado vago con código fresco = 📅 prioritario")
 check(of._fecha_oficial("Release Nov. 20, 2026") and of._fecha_oficial("sin fecha") is None, "fechas oficiales")
+# --- reajuste masivo de inventario (Fridam, 06/10) ---
+ocfg["sites"]=[{"name":"FR","url":"https://fr.com/c/products.json?limit=250","type":"api"}]
+rcat=[P(i,f"OP Booster Box {i}",stock=False) for i in range(72)]
+hr2=Harness(o,ocfg,lambda s:(s,list(rcat),None)); hr2.run()
+for i in range(41): rcat[i]=P(i,f"OP Booster Box {i}",stock=True)
+msgs=hr2.run()
+check(len(msgs)==1 and "reajuste de inventario" in msgs[0] and "41 productos" in msgs[0], f"41 restocks de 72 = un resumen: {[m[:60] for m in msgs]}")
+check(not hr2.state.get("__live__"), "el reajuste no registra avisos para editar")
+ocfg["sites"]=[{"name":"BIG","url":"https://big.com/c/products.json?limit=250","type":"api"}]
+bcat=[P(1000+i,f"OP Booster Box B{i}",stock=False) for i in range(240)]
+hb=Harness(o,ocfg,lambda s:(s,list(bcat),None)); hb.run()
+for i in range(20): bcat[i]=P(1000+i,f"OP Booster Box B{i}",stock=True)
+msgs=hb.run(); check(len(msgs)==1 and "reajuste" not in msgs[0] and "VUELVE" in msgs[0], "20 restocks de 240 = avisos normales")
 print(f"\n{ok} OK, {fail} FAIL")
 sys.exit(1 if fail else 0)
