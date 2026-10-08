@@ -22,7 +22,7 @@ GLOBAL_KEYS = {
     "mark_disappeared_oos", "resync_threshold", "cart_buttons", "max_cart_buttons",
     "edit_on_sold_out", "timezone", "official_sources", "official_check_minutes", "official_loud",
     "set_code_pattern", "mass_restock_threshold", "restock_cooldown_minutes", "new_max_age_days",
-    "shopify_max_pages",
+    "shopify_max_pages", "vip", "telegram_vip_chat_id",
     "required_keywords", "required_any_keywords", "required_patterns", "exclude_keywords",
     "top_priority_keywords", "high_value_keywords", "promo_keywords", "priority_exclude",
 }
@@ -30,6 +30,8 @@ SITE_KEYS = {
     "name", "url", "type", "priority", "currency", "include_keywords", "exclude_keywords",
     "selector", "title_selector", "link_selector", "price_selector", "cookie_challenge",
 }
+VIP_KEYS = {"all", "promos", "include_sold_out", "rules"}
+VIP_RULE_KEYS = {"label", "keywords", "require", "exclude", "lang", "max_eur", "min_eur"}
 HTML_KEYS = ("selector", "title_selector", "link_selector", "price_selector")
 
 
@@ -49,6 +51,23 @@ def revisar(cfg):
                 errores.append("set_code_pattern necesita 2 grupos: prefijo y número")
         except re.error as e:
             errores.append(f"set_code_pattern no es una regex válida: {e}")
+    vip = cfg.get("vip")
+    if vip is not None:
+        for k in vip:
+            if not k.startswith("_") and k not in VIP_KEYS:
+                errores.append(f"vip: clave desconocida {k!r} (¿mal escrita?)")
+        for i, r in enumerate(vip.get("rules", [])):
+            donde = f"vip.rules[{i}] ({r.get('label', '?')})"
+            for k in r:
+                if not k.startswith("_") and k not in VIP_RULE_KEYS:
+                    errores.append(f"{donde}: campo desconocido {k!r}")
+            if not r.get("label") or not r.get("keywords"):
+                errores.append(f"{donde}: necesita label y keywords")
+            if r.get("lang") not in (None, "en", "jp"):
+                errores.append(f"{donde}: lang {r.get('lang')!r} (debe ser 'en', 'jp' o nada)")
+            for k in ("max_eur", "min_eur"):
+                if r.get(k) is not None and not isinstance(r[k], (int, float)):
+                    errores.append(f"{donde}: {k} debe ser un número")
     for f in cfg.get("official_sources", []):
         falta = [k for k in ("name", "url", "selector") if not f.get(k)]
         if falta:

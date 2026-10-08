@@ -1,0 +1,22 @@
+name: Probar grupo de importantes
+
+# Manda un mensaje de prueba al grupo de importantes (secret TELEGRAM_VIP_CHAT_ID).
+# Lanzarlo a mano tras crear el grupo o si cambia su ID: si falla, el bot no está
+# dentro del grupo o el ID es incorrecto.
+on:
+  workflow_dispatch:
+
+jobs:
+  probar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python3 monitor.py --test-vip
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_VIP_CHAT_ID: ${{ secrets.TELEGRAM_VIP_CHAT_ID }}

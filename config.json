@@ -92,6 +92,106 @@
     }
   ],
   "set_code_pattern": "\\b(OP|EB|PRB)-?(\\d{2})\\b",
+  "vip": {
+    "_comment": "Grupo de importantes (secret TELEGRAM_VIP_CHAT_ID). Copia allí lo que cumpla alguna regla; el chat general lo sigue recibiendo todo. Sin idioma en el título = inglés; sin precio legible = entra.",
+    "promos": true,
+    "rules": [
+      {
+        "label": "Case",
+        "keywords": [
+          "case",
+          "booster case",
+          "sealed case",
+          "carton",
+          "cartón",
+          "12 displays",
+          "12 cajas",
+          "12 boxes",
+          "12 booster boxes",
+          "x12",
+          "12x"
+        ],
+        "exclude": [
+          "dice",
+          "dado",
+          "deck case",
+          "card case",
+          "storage",
+          "carrying",
+          "acryl",
+          "acril",
+          "sleeve",
+          "fundas",
+          "binder"
+        ],
+        "min_eur": 300
+      },
+      {
+        "label": "Booster box JP ≤80€",
+        "keywords": [
+          "booster box",
+          "display",
+          "booster display",
+          "caja de sobres",
+          "caja sobres",
+          "caja 24 sobres",
+          "caja de 24",
+          "24 sobres",
+          "24 packs",
+          "caja booster",
+          "booster-box",
+          "box"
+        ],
+        "exclude": [
+          "illustration",
+          "deck box",
+          "storage",
+          "gift",
+          "tin",
+          "premium card collection",
+          "starter",
+          "double pack",
+          "collection box",
+          "sleeve",
+          "fundas"
+        ],
+        "lang": "jp",
+        "max_eur": 80
+      },
+      {
+        "label": "Booster box EN ≤200€",
+        "keywords": [
+          "booster box",
+          "display",
+          "booster display",
+          "caja de sobres",
+          "caja sobres",
+          "caja 24 sobres",
+          "caja de 24",
+          "24 sobres",
+          "24 packs",
+          "caja booster",
+          "booster-box",
+          "box"
+        ],
+        "exclude": [
+          "illustration",
+          "deck box",
+          "storage",
+          "gift",
+          "tin",
+          "premium card collection",
+          "starter",
+          "double pack",
+          "collection box",
+          "sleeve",
+          "fundas"
+        ],
+        "lang": "en",
+        "max_eur": 200
+      }
+    ]
+  },
   "sites": [
     {
       "_comment": "Antes HTML de la categoría: solo leía la página 1 (12 de 15) y el precio salía con el texto de oferta pegado. La Store API de la misma categoría (id 20) trae todo. Renombrada para que la 1ª pasada sea baseline silencioso (el uid cambia de enlace a woo:id).",

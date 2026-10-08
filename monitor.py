@@ -98,6 +98,12 @@ SIG_KEY = "__sig__"        # clave reservada: firma de URL+filtros con la que se
 RUN_META_KEY = "__run__"   # clave reservada: última pasada completada (lo lee el heartbeat)
 LIVE_KEY = "__live__"      # clave reservada: producto avisado EN STOCK -> mensaje donde se avisó
 MSGS_KEY = "__msgs__"      # clave reservada: texto y botones de esos mensajes, para editarlos
+VIP_SENT_KEY = "__vip__"   # clave reservada: lo ya enviado al grupo de importantes (evita repetirlo)
+VIP_RESEND_MIN = 30        # si el aviso general falla y se reintenta, el de importantes no se repite
+# Cambio aproximado a euros para comparar con los máximos de `vip.rules`. No hace
+# falta precisión: un 5 % arriba o abajo no cambia si un case es razonable o no.
+FX_EUR = {"€": 1, "EUR": 1, "£": 1.16, "GBP": 1.16, "CHF": 1.07, "$": 0.86, "USD": 0.86,
+          "MXN": 0.047, "SEK": 0.09, "kr": 0.09, "¥": 0.0058, "JPY": 0.0058, "CAD": 0.62}
 LIVE_MAX_DIAS = 7          # pasado esto ya no se edita el aviso (y se olvida)
 OFFICIAL_KEY = "__official__"  # clave reservada: páginas oficiales vistas y códigos de set recientes
 # Todas las claves reservadas empiezan por "__": así heartbeat y poda las
@@ -502,7 +508,12 @@ def extract_products_api(data, base_url="", currency="€"):
         raw_price = prices.get("price") or "0"
         symbol = html_mod.unescape(prices.get("currency_symbol") or currency)
         try:
-            price = f"{int(raw_price) / 100:.2f}{symbol}"
+            # La Store API da el precio en la unidad mínima de la divisa: céntimos
+            # en EUR (2 decimales), pero yenes enteros en JPY (`currency_minor_unit`
+            # 0). Dividir siempre entre 100 dejaba una box japonesa de 21.305 ¥ en
+            # "213.05¥".
+            decimales = int(prices.get("currency_minor_unit", 2))
+            price = f"{int(raw_price) / 10 ** decimales:.{decimales}f}{symbol}"
         except (ValueError, TypeError):
             price = "Precio no disponible"
         in_stock = item.get("is_in_stock", item.get("has_stock", True))
@@ -735,6 +746,102 @@ def matches_patterns(title, patterns):
     "anniversay" de alguna tienda o "Celebrations 30th" con el orden invertido."""
     t = normalize_title(title)
     return any(re.search(p, t) for p in patterns)
+
+
+# ---------------------------------------------------------------------------
+# Grupo de IMPORTANTES: una copia de los avisos que el usuario ha marcado (por
+# tipo de producto, idioma y precio máximo) va a un segundo chat con su propio
+# sonido. El chat general sigue recibiéndolo todo.
+# ---------------------------------------------------------------------------
+
+def price_eur(price):
+    """"107.95€", "1436.95£", "€1.299,95", "12.50CHF" -> euros (float). None si no
+    se puede leer (sin precio o divisa desconocida)."""
+    m = re.search(r"([€$£¥]?)\s*(\d[\d.,]*)\s*([A-Za-z€$£¥]*)", price or "")
+    if not m:
+        return None
+    num = m.group(2).rstrip(".,")
+    if re.search(r",\d{1,2}$", num):          # formato europeo: 1.299,95
+        num = num.replace(".", "").replace(",", ".")
+    else:                                     # formato inglés: 1,299.95
+        num = num.replace(",", "")
+    try:
+        valor = float(num)
+    except ValueError:
+        return None
+    divisa = m.group(1) or m.group(3) or "€"
+    factor = FX_EUR.get(divisa) or FX_EUR.get(divisa.upper())
+    return valor * factor if factor else None
+
+
+_LANG_JP = re.compile(r"japan|japon|japones|japanisch|japonais|giappon|日本|(?<![a-z])(jp|jap|jpn)(?![a-z])")
+_LANG_OTRO = re.compile(r"(?<![a-z])(chin|korea|corea)|(?<![a-z])(kr|cn|chn|s-chn|t-chn)(?![a-z])|frances|french|"
+                        r"deutsch|german|aleman|italian|espanol|castellano|spanish|portugu|"
+                        r"[\[(](es|fr|de|it|pt|nl)[\])]")
+_LANG_EN = re.compile(r"english|ingles|englisch|anglais|inglese|[\[(]en[\])]")
+_LANG_EN_TOKEN = re.compile(r"(?<![A-Za-z])(EN|ENG)(?![A-Za-z])")  # en mayúsculas: "en" es preposición
+
+
+def detect_lang(title, site_name=""):
+    """'jp', 'en', 'otro' o None (el título no lo dice). Mira también el nombre de
+    la entrada del config, que a veces lo lleva ("Sunny Store (Cajas OP JAP)")."""
+    texto = f"{title} {site_name}"
+    t = normalize_title(texto)
+    if _LANG_JP.search(t):
+        return "jp"
+    if _LANG_OTRO.search(t):
+        return "otro"
+    if _LANG_EN.search(t) or _LANG_EN_TOKEN.search(texto):
+        return "en"
+    return None
+
+
+def _match_words(title_norm, keywords):
+    """Keyword como palabra entera ("case" no casa con "showcase")."""
+    for kw in keywords:
+        k = re.escape(normalize_title(kw))
+        if re.search(rf"(?<![a-z0-9]){k}(?![a-z0-9])", title_norm):
+            return True
+    return False
+
+
+def vip_match(a, site_name, config):
+    """¿Va este aviso al grupo de importantes? Devuelve el motivo (para el log) o
+    None. Lo dudoso entra: si no se sabe el idioma, cuenta como inglés, y si no se
+    puede leer el precio, como dentro del máximo. Mejor uno de más que perder uno."""
+    vip = config.get("vip") or {}
+    if not vip:
+        return None
+    if not a.get("in_stock") and not vip.get("include_sold_out"):
+        return None
+    if matches_keywords(a["title"], config.get("priority_exclude", [])):
+        return None
+    if vip.get("all"):
+        return "todo"
+    if vip.get("promos") and a.get("promo"):
+        return "promo"
+    t = normalize_title(a["title"])
+    lang = detect_lang(a["title"], site_name)
+    precio = price_eur(a.get("price"))
+    for r in vip.get("rules", []):
+        if not _match_words(t, r["keywords"]):
+            continue
+        if r.get("require") and not _match_words(t, r["require"]):
+            continue
+        if r.get("exclude") and _match_words(t, r["exclude"]):
+            continue
+        if r.get("lang") == "jp" and lang != "jp":
+            continue
+        if r.get("lang") == "en" and lang not in ("en", None):
+            continue
+        if r.get("max_eur") is not None and precio is not None and precio > r["max_eur"]:
+            continue
+        # Un case de verdad son cientos de euros: lo que cueste menos es un accesorio
+        # ("Dice Case", "Card Case") que comparte la palabra.
+        if r.get("min_eur") is not None and precio is not None and precio < r["min_eur"]:
+            continue
+        return r["label"]
+    return None
 
 
 def normalize_state(raw):
@@ -1270,25 +1377,37 @@ def format_avalanche(entradas, config):
     bot_label = config.get("bot_label", "MONITOR")
     title_line = (f"{bot_emoji} <b>{bot_label} — {len(entradas)} tiendas con novedades</b> "
                   f"({total} productos)\n")
-    blocks = []
-    for a, tienda in shown:
-        mark = rank_mark(a) or "•"
-        tag = "🔄" if a["alert_type"] == "restock" else "🆕"
-        if a.get("repeat"):
-            tag += " (otra vez)"
-        stock_mark = "" if a["in_stock"] else " ⚠️ AGOTADO"
-        b = [f"{mark} {tag} <b>{html_mod.escape(a['title'])}</b>{stock_mark}",
-             f"  💰 {html_mod.escape(a['price'])}" + (" ⏳ bajo pedido" if a.get("backorder") else "")
-             + f" — <i>{html_mod.escape(tienda)}</i>"]
-        if a.get("stock_text") and a["in_stock"]:
-            b.append(f"  📊 {html_mod.escape(a['stock_text'])}")
-        if a["link"]:
-            b.append(f"  🔗 {a['link']}")
-        b.append("")
-        blocks.append("\n".join(b))
+    blocks = [_linea_con_tienda(a, tienda) for a, tienda in shown]
     if total > len(shown):
         blocks.append(f"... y {total - len(shown)} productos más")
     return _chunk_message(title_line, blocks)
+
+
+def _linea_con_tienda(a, tienda):
+    """Un producto en una línea con la tienda al lado (avalancha y grupo de importantes)."""
+    mark = rank_mark(a) or "•"
+    tag = "🔄" if a["alert_type"] == "restock" else "🆕"
+    if a.get("repeat"):
+        tag += " (otra vez)"
+    stock_mark = "" if a["in_stock"] else " ⚠️ AGOTADO"
+    b = [f"{mark} {tag} <b>{html_mod.escape(a['title'])}</b>{stock_mark}",
+         f"  💰 {html_mod.escape(a['price'])}" + (" ⏳ bajo pedido" if a.get("backorder") else "")
+         + f" — <i>{html_mod.escape(tienda)}</i>"]
+    if a.get("stock_text") and a["in_stock"]:
+        b.append(f"  📊 {html_mod.escape(a['stock_text'])}")
+    if a["link"]:
+        b.append(f"  🔗 {a['link']}")
+    b.append("")
+    return "\n".join(b)
+
+
+def format_vip(items, config):
+    """Aviso para el grupo de importantes: `items` = [(alerta, tienda)], lo gordo
+    primero y con la tienda en cada línea (puede juntar varias tiendas)."""
+    items = sorted(items, key=lambda t: (product_rank(t[0]), 0 if t[0]["alert_type"] == "restock" else 1))
+    title_line = (f"⭐ {config.get('bot_emoji', '🔔')} <b>{html_mod.escape(config.get('bot_label', 'MONITOR'))}"
+                  f" — IMPORTANTE</b>\n")
+    return _chunk_message(title_line, [_linea_con_tienda(a, tienda) for a, tienda in items])
 
 
 def run_once(priority_filter=None):
@@ -1296,6 +1415,7 @@ def run_once(priority_filter=None):
     state = load_state()
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN") or config["telegram_bot_token"]
     chat_id = os.environ.get("TELEGRAM_CHAT_ID") or config["telegram_chat_id"]
+    vip_chat = os.environ.get("TELEGRAM_VIP_CHAT_ID") or config.get("telegram_vip_chat_id")
 
     if bot_token in ("TU_BOT_TOKEN_AQUI", "USE_GITHUB_SECRET", "", None):
         log.error("⚠️  Falta TELEGRAM_BOT_TOKEN (env o config.json)")
@@ -1388,7 +1508,8 @@ def run_once(priority_filter=None):
             for key, rec in live.items():
                 if not key.startswith(pref) or "agotado" in rec:
                     continue
-                v = site_state.get(key[len(pref):])
+                # Los avisos del grupo de importantes llevan "|vip" al final de la clave.
+                v = site_state.get(key[len(pref):].removesuffix("|vip"))
                 if v is None:
                     continue
                 if v.get("in_stock", True):
@@ -1430,13 +1551,54 @@ def run_once(priority_filter=None):
     solo_prioritarios = config.get("sound_only_for_priority", True)
     umbral_avalancha = config.get("avalanche_store_threshold", DEFAULT_AVALANCHE_STORES)
 
+    def enviar_vip(pares):
+        """Copia al grupo de importantes lo que cumple `vip`. Va ANTES del aviso
+        general para que ese, si ya no le queda nada gordo, llegue en silencio y el
+        móvil no suene dos veces. Devuelve los ids (python) de las alertas enviadas.
+        Si el envío falla no bloquea nada: el aviso general sale igual y con sonido."""
+        if not vip_chat or not config.get("vip"):
+            return set()
+        enviados = state.setdefault(VIP_SENT_KEY, {})
+        ahora = time.time()
+        for k in [k for k, ts in enviados.items() if ahora - ts > 86400]:
+            del enviados[k]
+        items, claves = [], []
+        for a, name in pares:
+            clave = f"{dominios[name]}|{a['uid']}|{a['alert_type']}"
+            # Si el aviso general falló, la pasada siguiente repite la tienda entera:
+            # lo que ya llegó al grupo de importantes no se vuelve a mandar.
+            if ahora - enviados.get(clave, 0) < VIP_RESEND_MIN * 60:
+                continue
+            motivo = vip_match(a, name, config)
+            if motivo:
+                items.append((a, name))
+                claves.append(clave)
+                log.info(f"⭐ Importante ({motivo}): {a['title'][:60]} — {name}")
+        if not items:
+            return set()
+        msgs = format_vip(items, config)
+        botones = cart_keyboard(items, config)
+        silent = all(a.get("repeat") for a, _ in items)
+        ids = send_telegram_chunks(bot_token, vip_chat, msgs, silent=silent, reply_markup=botones)
+        if not ids:
+            log.error("Aviso al grupo de importantes NO enviado")
+            return set()
+        register_live(state, msgs, ids, botones, [(a, dominios[n]) for a, n in items], chat=vip_chat)
+        for c in claves:
+            enviados[c] = ahora
+        return {id(a) for a, _ in items}
+
+    def sin_lo_vip(alerts, en_vip):
+        return [a for a in alerts if id(a) not in en_vip]
+
     if len(con_alertas) > umbral_avalancha:
         # Avalancha: un único mensaje en vez de uno por tienda.
         todas = [a for _, _, alerts, _ in con_alertas for a in alerts]
         log.info(f"AVALANCHA: {len(con_alertas)} tiendas, {len(todas)} productos "
                  f"-> un solo mensaje agrupado")
+        en_vip = enviar_vip([(a, name) for name, _, alerts, _ in con_alertas for a in alerts])
         msgs = format_avalanche(con_alertas, config)
-        silent = solo_prioritarios and not is_loud(todas, config)
+        silent = solo_prioritarios and not is_loud(sin_lo_vip(todas, en_vip), config)
         botones = cart_keyboard([(a, name) for name, _, alerts, _ in con_alertas for a in alerts], config)
         ids = send_telegram_chunks(bot_token, chat_id, msgs, silent=silent, reply_markup=botones)
         if ids:
@@ -1450,8 +1612,9 @@ def run_once(priority_filter=None):
                       "se reintenta en la próxima pasada")
     else:
         for name, priority, alerts, new_site_state in con_alertas:
+            en_vip = enviar_vip([(a, name) for a in alerts])
             msgs = format_notification(name, priority, alerts, config)
-            silent = solo_prioritarios and not is_loud(alerts, config)
+            silent = solo_prioritarios and not is_loud(sin_lo_vip(alerts, en_vip), config)
             botones = cart_keyboard([(a, None) for a in alerts], config)
             ids = send_telegram_chunks(bot_token, chat_id, msgs, silent=silent, reply_markup=botones)
             if ids:
@@ -1529,26 +1692,32 @@ def _hora_local(ts, config):
     return datetime.fromtimestamp(ts, tz).strftime("%H:%M")
 
 
-def register_live(state, msgs, ids, markup, entradas):
+def register_live(state, msgs, ids, markup, entradas, chat=None):
     """Apunta en qué mensaje se avisó de cada producto EN STOCK, para poder
-    editarlo cuando se agote. `entradas` = [(alerta, dominio)]."""
+    editarlo cuando se agote. `entradas` = [(alerta, dominio)]. `chat` solo para
+    el grupo de importantes (el general es el chat por defecto): sus ids de
+    mensaje van aparte porque los de dos chats distintos pueden coincidir."""
     if not ids:
         return
     ahora = time.time()
     store = state.setdefault(MSGS_KEY, {})
     live = state.setdefault(LIVE_KEY, {})
     pares = [(t, i) for t, i in zip(msgs, ids) if not isinstance(i, bool)]
+    def mkey(mid):
+        return f"{chat}:{mid}" if chat else str(mid)
     for n, (texto, mid) in enumerate(pares):
-        store[str(mid)] = {"text": texto, "ts": ahora,
-                           "markup": markup if n == len(pares) - 1 else None}
+        store[mkey(mid)] = {"text": texto, "ts": ahora,
+                            "markup": markup if n == len(pares) - 1 else None}
     for a, dominio in entradas:
         if not a.get("in_stock"):
             continue
         marca = f"<b>{html_mod.escape(a['title'])}</b>"
         mid = next((i for t, i in pares if marca in t), None)
         if mid is not None:
-            live[f"{dominio}|{a['uid']}"] = {"msg": mid, "ts": ahora, "marca": marca,
-                                             "cart": a.get("cart_url", "")}
+            rec = {"msg": mid, "ts": ahora, "marca": marca, "cart": a.get("cart_url", "")}
+            if chat:
+                rec.update(chat=chat, mkey=mkey(mid))
+            live[f"{dominio}|{a['uid']}" + ("|vip" if chat else "")] = rec
 
 
 def edit_sold_out(state, bot_token, chat_id, config):
@@ -1563,7 +1732,7 @@ def edit_sold_out(state, bot_token, chat_id, config):
             if ahora - rec.get("ts", 0) > LIVE_MAX_DIAS * 86400:
                 live.pop(key)
             continue
-        m = store.get(str(rec["msg"]))
+        m = store.get(rec.get("mkey", str(rec["msg"])))
         if not m or ahora - rec["agotado"] > 86400:
             live.pop(key)
             continue
@@ -1574,7 +1743,7 @@ def edit_sold_out(state, bot_token, chat_id, config):
         if markup and rec.get("cart"):
             markup = {"inline_keyboard": [f for f in markup.get("inline_keyboard", [])
                                           if not any(b.get("url") == rec["cart"] for b in f)]}
-        r = edit_telegram(bot_token, chat_id, rec["msg"], texto, markup)
+        r = edit_telegram(bot_token, rec.get("chat") or chat_id, rec["msg"], texto, markup)
         if r is False:
             continue
         live.pop(key)
@@ -1582,7 +1751,7 @@ def edit_sold_out(state, bot_token, chat_id, config):
             m["text"], m["markup"] = texto, markup
             log.info(f"Aviso editado: agotado tras {_duracion(rec['agotado'] - rec['ts'])} ({key})")
     # Mensajes que ya no tienen ningún producto pendiente de editar
-    vivos = {str(r["msg"]) for r in live.values()}
+    vivos = {r.get("mkey", str(r["msg"])) for r in live.values()}
     for mid in [k for k, v in store.items() if k not in vivos and ahora - v.get("ts", 0) > 3600]:
         store.pop(mid)
 
@@ -1811,7 +1980,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--priority", choices=["high", "medium"])
+    parser.add_argument("--test-vip", action="store_true",
+                        help="manda un mensaje de prueba al grupo de importantes y sale")
     args = parser.parse_args()
+    if args.test_vip:
+        cfg = load_config()
+        vip_chat = os.environ.get("TELEGRAM_VIP_CHAT_ID") or cfg.get("telegram_vip_chat_id")
+        if not vip_chat:
+            sys.exit("Falta TELEGRAM_VIP_CHAT_ID")
+        ok = send_telegram(os.environ.get("TELEGRAM_BOT_TOKEN") or cfg["telegram_bot_token"], vip_chat,
+                           f"⭐ {cfg.get('bot_emoji', '🔔')} <b>{html_mod.escape(cfg.get('bot_label', 'MONITOR'))}</b>"
+                           f" — prueba: este bot puede escribir en el grupo de importantes ✅")
+        sys.exit(0 if ok else "No se pudo enviar al grupo de importantes (¿el bot está dentro?)")
     if args.loop:
         run_loop(priority_filter=args.priority)
     else:

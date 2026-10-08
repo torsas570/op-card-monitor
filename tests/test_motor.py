@@ -330,5 +330,78 @@ rl._RL.update(n=0,pausa=False)
 for k in range(5):
     _,pr,err=rl.fetch_site_serial({"name":f"T{k}","url":f"https://t{k}.com/collections/x/products.json?limit=250","type":"api"},{"user_agent":"UA"})
 check(len(llamadas)==3 and rl._RL["pausa"] and str(err).startswith(rl.RATE_LIMIT_ERR), f"429: sin reintento y pausa tras 3 tiendas ({len(llamadas)} peticiones)")
+
+# --- grupo de IMPORTANTES (vip) ---
+v=load("vip")
+check(v.price_eur("107.95€")==107.95 and abs(v.price_eur("100.00£")-116)<0.01 and v.price_eur("€1.299,95")==1299.95
+      and v.price_eur("1,299.95$")==1299.95*0.86 and v.price_eur("Precio no disponible") is None, "price_eur: formatos y divisas")
+check(v.detect_lang("One Piece OP-14 Booster Box Japonés")=="jp" and v.detect_lang("OP14 Box (JP)")=="jp"
+      and v.detect_lang("OP14 Booster Box EN")=="en" and v.detect_lang("Caja OP14 en preventa") is None
+      and v.detect_lang("OP14 Box", "Sunny Store (Cajas OP JAP)")=="jp" and v.detect_lang("OP14 Box Chinese")=="otro"
+      and v.detect_lang("Booster Box Machine") is None, "detect_lang: jp/en/otro/None, 'en' preposición no cuenta")
+vcfg={"priority_exclude":["card case"],"vip":{"promos":True,"rules":[
+    {"label":"Case","keywords":["case","carton"],"exclude":["dice"],"min_eur":300},
+    {"label":"Box JP","keywords":["booster box","box"],"exclude":["illustration"],"lang":"jp","max_eur":80},
+    {"label":"Box EN","keywords":["booster box","box"],"exclude":["illustration"],"lang":"en","max_eur":200},
+    {"label":"UPC 30th","keywords":["ultra premium"],"require":["30th","30 aniversario"]},
+    {"label":"UPC","keywords":["ultra premium"],"max_eur":200}]}}
+def A(t,price="100€",stock=True,promo=False): return {"title":t,"price":price,"in_stock":stock,"promo":promo,"alert_type":"new","uid":t}
+vm=lambda t,**k: v.vip_match(A(t,**k),"Tienda",vcfg)
+check(vm("OP15 Booster Case EN",price="2500€")=="Case" and vm("OP15 Booster Case EN",price="Precio no disponible")=="Case", "case: cualquier precio")
+check(vm("OP15 Case",price="150€") is None and vm("Official Dice and Dice Case",price="900€") is None, "case: mínimo 300€ y exclude")
+check(vm("Card Case One Piece",price="900€")is None, "priority_exclude manda: 'card case' no es un case")
+check(vm("Showcase OP15") is None, "keyword como palabra entera ('showcase' no es case)")
+check(vm("OP15 Booster Box JP",price="79€")=="Box JP" and vm("OP15 Booster Box JP",price="95€") is None, "box JP: máximo 80")
+check(vm("OP15 Booster Box",price="180€")=="Box EN" and vm("OP15 Booster Box EN",price="230€") is None, "box sin idioma cuenta como EN; máximo 200")
+check(vm("OP15 Booster Box Chinese",price="50€") is None, "otro idioma no entra")
+check(vm("OP15 Booster Box",price="Precio no disponible")=="Box EN", "sin precio legible: entra (dudoso)")
+check(vm("Illustration Box Vol 3",price="30€") is None, "exclude de la regla")
+check(vm("Ultra Premium Collection 30th",price="600€")=="UPC 30th" and vm("Ultra Premium Collection Mega",price="250€") is None
+      and vm("Ultra Premium Collection Mega",price="190€")=="UPC", "UPC: 30th sin límite, el resto hasta 200")
+check(vm("Saikyo Jump promo",price="900€",promo=True)=="promo", "promos sin límite")
+check(vm("OP15 Booster Case",stock=False,price="1200€") is None, "agotado no va al grupo")
+check(v.vip_match(A("Naruto llavero",stock=False),"T",{"vip":{"all":True,"include_sold_out":True}})=="todo", "vip.all + include_sold_out")
+_,wp,_=(None,v.extract_products_api([{"id":1,"name":"OP06 JP Box","permalink":"https://s/p","is_in_stock":True,
+    "prices":{"price":"21305","currency_symbol":"¥","currency_minor_unit":0}},{"id":2,"name":"x","permalink":"https://s/q",
+    "is_in_stock":True,"prices":{"price":"10995","currency_symbol":"€","currency_minor_unit":2}}]),None)
+check(wp[0]["price"]=="21305¥" and wp[1]["price"]=="109.95€", f"Woo: yenes sin decimales ({wp[0]['price']}, {wp[1]['price']})")
+# run_once: copia al grupo, el general sin sonido si ya no le queda nada gordo, agotado editado en los dos
+os.environ["TELEGRAM_VIP_CHAT_ID"]="VIP"
+vb=dict(base, silent_first_run=True, priority_exclude=[], high_value_keywords=["booster box","case"],
+        vip={"rules":[{"label":"Box","keywords":["booster box"],"max_eur":200}]})
+vcat={"A":[P(1,"Naruto starter",stock=True)]}
+hv=Harness(v,vb,lambda site:(site,list(vcat["A"]),None))
+envios=[]
+def fake_send(tok,chat,msg,silent=False,reply_markup=None,**k):
+    envios.append((chat,msg,silent)); hv._mid[0]+=1; return hv._mid[0]
+v.send_telegram=fake_send
+hv.run()
+vcat["A"]=[P(1,"Naruto starter",stock=True),P(2,"Naruto booster box",stock=True),P(3,"Naruto booster box premium",stock=True)]
+vcat["A"][2]["price"]="250€"
+envios.clear(); hv.run()
+vip_m=[e for e in envios if e[0]=="VIP"]; gen=[e for e in envios if e[0]!="VIP"]
+check(len(vip_m)==1 and "IMPORTANTE" in vip_m[0][1] and "Naruto booster box</b>" in vip_m[0][1] and "premium" not in vip_m[0][1] and not vip_m[0][2],
+      "al grupo va solo la box dentro del máximo, con sonido")
+check(len(gen)==1 and "premium" in gen[0][1] and not gen[0][2], "general: lo recibe todo y suena (queda la box de 250€ fuera del grupo)")
+vcat["A"]=[P(1,"Naruto starter",stock=True),P(2,"Naruto booster box",stock=False),P(3,"Naruto booster box premium",stock=True)]
+vcat["A"][2]["price"]="250€"
+hv.edits.clear(); hv.run(); hv.run()
+check(len(hv.edits)==2 and all("agotado" in e[1] for e in hv.edits), f"agotado: se edita en el general Y en el grupo ({len(hv.edits)} ediciones)")
+# Solo lo de importantes es gordo -> el general llega en silencio
+vb2=dict(vb, high_value_keywords=["booster box"])
+vcat["A"]=[P(10,"Naruto starter X",stock=True)]
+hs=Harness(v,vb2,lambda site:(site,list(vcat["A"]),None)); v.send_telegram=fake_send; hs.run()
+vcat["A"].append(P(11,"Naruto booster box 2",stock=True)); envios.clear(); hs.run()
+check([e[0] for e in envios]==["VIP","y"] and envios[1][2], "si lo gordo ya fue al grupo, el general llega en silencio")
+# Si el general falla, el grupo no se repite en la siguiente pasada
+vcat["A"].append(P(12,"Naruto booster box 3",stock=True))
+def falla_general(tok,chat,msg,silent=False,reply_markup=None,**k):
+    envios.append((chat,msg,silent))
+    if chat!="VIP": return False
+    hs._mid[0]+=1; return hs._mid[0]
+v.send_telegram=falla_general; envios.clear(); hs.run()
+v.send_telegram=fake_send; envios.clear(); hs.run()
+check([e[0] for e in envios]==["y"], f"reintento del general sin repetir el grupo ({[e[0] for e in envios]})")
+del os.environ["TELEGRAM_VIP_CHAT_ID"]
 print(f"\n{ok} OK, {fail} FAIL")
 sys.exit(1 if fail else 0)
